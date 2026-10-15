@@ -1,5 +1,5 @@
 
 window.TALKATCH_CONFIG = {
-  supabaseUrl: "YOUR_SUPABASE_PROJECT_URL",
+  supabaseUrl: "https://YOUR_PROJECT_ID.supabase.co",
   supabasePublishableKey: "YOUR_SUPABASE_PUBLISHABLE_KEY"
 };
