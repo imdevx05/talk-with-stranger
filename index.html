@@ -6,152 +6,181 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111827">
   <meta name="description" content="TALKATCH — connect, share, and chat.">
-  <title>TALKATCH — Connect with people</title>
+  <title>TALKATCH — Your community</title>
   <link rel="stylesheet" href="css/style.css">
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <script src="config/config.js"></script>
   <script src="js/app.js" defer></script>
 </head>
 <body data-theme="dark">
   <header class="topbar">
-    <a href="#" class="brand" aria-label="TALKATCH home">
-      <span class="brand-icon">T</span> TALKATCH<span class="dot">.</span>
+    <a class="brand" href="#" aria-label="TALKATCH home">
+      <span class="brand-icon">T</span>
+      <span>TALKATCH<span class="brand-dot">.</span></span>
     </a>
     <div class="top-actions">
-      <span id="user-label" class="user-label">Welcome</span>
-      <button id="theme" class="icon-btn" type="button" aria-label="Switch theme" title="Switch theme">
-        <i data-lucide="sun-moon"></i>
-      </button>
+      <span id="user-label" class="muted">Welcome</span>
+      <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle theme">◐</button>
       <button id="logout-btn" class="btn btn-outline hidden" type="button">Log out</button>
     </div>
   </header>
 
-  <main>
+  <main class="page">
     <section id="auth-view" class="auth-layout">
       <div class="hero">
-        <div class="eyebrow"><span class="pulse"></span> YOUR SPACE TO CONNECT</div>
-        <h1>Meet people.<br><span>Share your world.</span></h1>
-        <p>Make connections, share your thoughts, and find your people with TALKATCH.</p>
-        <div class="hero-tags">
-          <span>✦ Real connections</span>
-          <span>✦ Your community</span>
-          <span>✦ Your voice</span>
+        <span class="eyebrow">YOUR SPACE TO CONNECT</span>
+        <h1>Real people.<br><span>Real conversations.</span></h1>
+        <p>Meet people, send messages, share pictures, and talk face to face.</p>
+        <div class="feature-pills">
+          <span>Private messaging</span><span>Picture sharing</span>
+          <span>Voice & video</span>
         </div>
       </div>
 
-      <div class="auth-card">
+      <div class="panel auth-card">
         <div class="auth-tabs">
-          <button type="button" class="auth-tab active" data-auth-tab="login">Log in</button>
-          <button type="button" class="auth-tab" data-auth-tab="signup">Create account</button>
+          <button class="auth-tab active" data-auth-tab="login" type="button">Log in</button>
+          <button class="auth-tab" data-auth-tab="signup" type="button">Create account</button>
         </div>
-
-        <form id="loginForm" class="auth-form">
+        <form id="login-form">
           <h2>Welcome back</h2>
-          <p class="muted">Log in to continue to TALKATCH.</p>
-          <label for="login-email">Email address</label>
-          <input id="login-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+          <label for="login-email">Email</label>
+          <input id="login-email" type="email" autocomplete="email" required>
           <label for="login-password">Password</label>
-          <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Your password" required>
-          <button class="btn btn-primary full" type="submit">Log in <i data-lucide="arrow-right"></i></button>
-          <button id="forgot-password" class="text-btn" type="button">Forgot your password?</button>
+          <input id="login-password" type="password" autocomplete="current-password" required>
+          <button class="btn btn-primary full" type="submit">Log in</button>
         </form>
-
-        <form id="signupForm" class="auth-form hidden">
-          <h2>Create your account</h2>
-          <p class="muted">Join the TALKATCH community.</p>
+        <form id="signup-form" class="hidden">
+          <h2>Join TALKATCH</h2>
           <label for="signup-name">Display name</label>
-          <input id="signup-name" name="display_name" type="text" minlength="2" maxlength="40" placeholder="Your name" required>
+          <input id="signup-name" maxlength="40" required>
           <label for="signup-username">Username</label>
-          <input id="signup-username" name="username" type="text" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]+" placeholder="your_username" required>
-          <label for="signup-email">Email address</label>
-          <input id="signup-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
-          <label for="signup-password">Password</label>
-          <input id="signup-password" name="password" type="password" minlength="8" autocomplete="new-password" placeholder="At least 8 characters" required>
-          <button class="btn btn-primary full" type="submit">Create account <i data-lucide="arrow-right"></i></button>
-          <p class="small muted">You may need to confirm your email before logging in.</p>
+          <input id="signup-username" pattern="[A-Za-z0-9_]+" minlength="3" maxlength="24" required>
+          <label for="signup-email">Email</label>
+          <input id="signup-email" type="email" autocomplete="email" required>
+          <label for="signup-password">Password (at least 8 characters)</label>
+          <input id="signup-password" type="password" minlength="8" autocomplete="new-password" required>
+          <button class="btn btn-primary full" type="submit">Create account</button>
+          <p class="muted small">Email confirmation may be required.</p>
         </form>
-        <div id="auth-message" class="notice hidden" role="status"></div>
+        <button id="forgot-password" class="text-btn" type="button">Forgot password?</button>
+        <p id="auth-status" class="status" role="status"></p>
       </div>
     </section>
 
-    <section id="app-view" class="app-layout hidden">
+    <section id="app-view" class="dashboard hidden">
       <aside class="sidebar panel">
-        <div class="side-user">
-          <img id="side-avatar" class="avatar avatar-lg" alt="Your avatar" src="https://api.dicebear.com/9.x/initials/svg?seed=User">
-          <div class="side-user-info">
-            <strong id="side-name">Your profile</strong>
-            <span id="side-username" class="muted">@username</span>
+        <div class="side-profile">
+          <div id="my-avatar" class="avatar">T</div>
+          <div class="truncate">
+            <strong id="my-name">Your profile</strong>
+            <p id="my-username" class="muted small">@username</p>
           </div>
         </div>
-        <nav class="side-nav" aria-label="Main navigation">
-          <button class="nav-item active" data-view="feed"><i data-lucide="house"></i> Home feed</button>
-          <button class="nav-item" data-view="people"><i data-lucide="users"></i> People</button>
-          <button class="nav-item" data-view="notifications"><i data-lucide="bell"></i> Notifications <span id="notification-count" class="count hidden">0</span></button>
-          <button class="nav-item" data-view="profile"><i data-lucide="user-round"></i> My profile</button>
+        <nav class="nav-list">
+          <button class="nav-item active" data-view="home">▦ <span>Overview</span></button>
+          <button class="nav-item" data-view="people">♙ <span>People</span></button>
+          <button class="nav-item" data-view="messages">☏ <span>Messages</span></button>
+          <button class="nav-item hidden" id="admin-nav" data-view="admin">⚙ <span>Admin panel</span></button>
         </nav>
-        <div class="sidebar-footer"><span class="pulse"></span> Make every connection count.</div>
+        <div class="sidebar-note">✦ Connect with kindness.</div>
       </aside>
 
       <section class="main-column">
-        <section id="feed-view" class="content-view">
-          <div class="section-heading">
-            <div><span class="eyebrow">YOUR COMMUNITY</span><h2>Home feed</h2></div>
-            <button id="refresh-feed" class="icon-btn" type="button" aria-label="Refresh feed"><i data-lucide="refresh-cw"></i></button>
+        <section id="view-home" class="view">
+          <div class="page-heading">
+            <div><p class="eyebrow">YOUR COMMUNITY</p><h1>Welcome to TALKATCH</h1>
+              <p class="muted">Your space for conversations and connections.</p>
+            </div>
           </div>
-          <form id="postForm" class="panel composer">
-            <div class="composer-top">
-              <img id="composer-avatar" class="avatar" alt="" src="https://api.dicebear.com/9.x/initials/svg?seed=User">
-              <textarea name="content" maxlength="2000" rows="3" placeholder="What's on your mind?" required></textarea>
-            </div>
-            <div class="composer-bottom"><span class="muted small">Share something with your community.</span><button class="btn btn-primary" type="submit"><i data-lucide="send"></i> Post</button></div>
-          </form>
-          <div id="feed-list" class="feed-list"><div class="panel empty-state">Loading your feed…</div></div>
+          <div class="stats-grid">
+            <article class="panel stat"><span class="muted">Your account</span><strong id="stat-account">Member</strong><small>Signed in securely</small></article>
+            <article class="panel stat"><span class="muted">Messaging</span><strong>Ready to connect</strong><small>Choose someone to chat with</small></article>
+            <article class="panel stat"><span class="muted">Calls</span><strong>Voice + video</strong><small>Allow microphone/camera access</small></article>
+          </div>
+          <div class="panel welcome-panel">
+            <span class="eyebrow">GET STARTED</span>
+            <h2>Make your next connection.</h2>
+            <p class="muted">Find a member, start a private conversation, or call someone directly.</p>
+            <button class="btn btn-primary" data-go="people" type="button">Find people</button>
+          </div>
+          <div class="panel safety-panel">
+            <h3>Stay safe</h3>
+            <p class="muted">Never share passwords, financial information, or your home address with strangers. Report abusive behavior to the administrators.</p>
+          </div>
         </section>
 
-        <section id="people-view" class="content-view hidden">
-          <div class="section-heading"><div><span class="eyebrow">FIND YOUR PEOPLE</span><h2>Community</h2></div></div>
-          <div id="people-list" class="people-grid"></div>
+        <section id="view-people" class="view hidden">
+          <div class="page-heading"><div><p class="eyebrow">COMMUNITY</p><h1>Find people</h1><p class="muted">Start a private conversation with another member.</p></div></div>
+          <input id="people-search" placeholder="Search usernames and display names…" aria-label="Search people">
+          <div id="people-list" class="people-list"><div class="panel">Loading members…</div></div>
         </section>
 
-        <section id="notifications-view" class="content-view hidden">
-          <div class="section-heading"><div><span class="eyebrow">STAY IN THE LOOP</span><h2>Notifications</h2></div><button id="mark-read" class="btn btn-outline" type="button">Mark all read</button></div>
-          <div id="notifications-list" class="feed-list"></div>
+        <section id="view-messages" class="view hidden">
+          <div class="page-heading"><div><p class="eyebrow">PRIVATE CHAT</p><h1>Messages</h1><p class="muted">Only conversation members can access private chats.</p></div></div>
+          <div class="chat-layout panel">
+            <aside class="chat-contacts">
+              <h3>People</h3>
+              <input id="chat-search" placeholder="Find someone…" aria-label="Find a chat contact">
+              <div id="chat-contacts-list"></div>
+            </aside>
+            <section class="chat-main">
+              <div class="chat-heading">
+                <div><strong id="chat-title">Choose someone</strong><p id="chat-subtitle" class="muted small">Your private conversation</p></div>
+                <div class="call-actions">
+                  <button id="voice-call" class="icon-btn" type="button" title="Voice call" disabled>☎</button>
+                  <button id="video-call" class="icon-btn" type="button" title="Video call" disabled>▣</button>
+                  <button id="end-call" class="icon-btn hidden" type="button" title="End call">■</button>
+                </div>
+              </div>
+              <div id="call-banner" class="call-banner hidden">
+                <span id="call-banner-text">Incoming call</span>
+                <button id="accept-call" class="btn btn-primary" type="button">Accept</button>
+                <button id="decline-call" class="btn btn-outline" type="button">Decline</button>
+              </div>
+              <div id="video-stage" class="video-stage hidden">
+                <video id="remote-video" autoplay playsinline></video>
+                <video id="local-video" autoplay muted playsinline></video>
+              </div>
+              <div id="chat-messages" class="chat-messages">
+                <div class="empty-chat"><span>✉</span><h3>Your conversations</h3><p class="muted">Select a person to start chatting.</p></div>
+              </div>
+              <form id="message-form" class="message-form">
+                <div id="image-preview" class="image-preview hidden"></div>
+                <div class="message-tools">
+                  <label class="attach-btn" for="message-image" title="Attach a picture">＋ Photo</label>
+                  <input id="message-image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+                  <textarea id="message-input" rows="1" maxlength="5000" placeholder="Write a message…" aria-label="Message" disabled></textarea>
+                  <button class="btn btn-primary" type="submit" id="send-message" disabled>Send ↗</button>
+                </div>
+                <p id="chat-status" class="muted small"></p>
+              </form>
+            </section>
+          </div>
         </section>
 
-        <section id="profile-view" class="content-view hidden">
-          <div class="section-heading"><div><span class="eyebrow">YOUR SPACE</span><h2>My profile</h2></div></div>
-          <form id="profileForm" class="panel profile-form">
-            <div class="profile-preview">
-              <img id="profile-avatar-preview" class="avatar avatar-xl" alt="Profile picture" src="https://api.dicebear.com/9.x/initials/svg?seed=User">
-              <div><strong>Profile picture</strong><p class="muted small">Upload a JPG, PNG, or WebP image.</p></div>
-            </div>
-            <label for="profile-avatar">Upload avatar</label>
-            <input id="profile-avatar" name="avatar" type="file" accept="image/png,image/jpeg,image/webp">
-            <label for="profile-display-name">Display name</label>
-            <input id="profile-display-name" name="display_name" maxlength="40" required>
-            <label for="profile-username">Username</label>
-            <input id="profile-username" name="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]+" required>
-            <label for="profile-bio">Bio</label>
-            <textarea id="profile-bio" name="bio" maxlength="300" rows="4" placeholder="Tell people a little about yourself…"></textarea>
-            <button class="btn btn-primary" type="submit">Save profile</button>
-          </form>
-          <h3 class="subheading">My posts</h3>
-          <div id="my-posts" class="feed-list"></div>
+        <section id="view-admin" class="view hidden">
+          <div class="page-heading"><div><p class="eyebrow">MANAGEMENT</p><h1>Admin dashboard</h1><p class="muted">Review reports and manage member access.</p></div></div>
+          <div class="stats-grid">
+            <article class="panel stat"><span class="muted">Members</span><strong id="admin-member-count">—</strong></article>
+            <article class="panel stat"><span class="muted">Open reports</span><strong id="admin-report-count">—</strong></article>
+          </div>
+          <div class="panel admin-section">
+            <h2>Member management</h2>
+            <input id="admin-user-search" placeholder="Search members…">
+            <div id="admin-users-list"></div>
+          </div>
+          <div class="panel admin-section">
+            <h2>Reports</h2>
+            <div id="admin-reports-list"></div>
+          </div>
         </section>
       </section>
 
       <aside class="rightbar">
-        <div class="panel side-card">
-          <span class="eyebrow">TALKATCH TIP</span>
-          <h3>Be yourself.</h3>
-          <p class="muted">Kind words and genuine conversations make a better community.</p>
-        </div>
-        <div class="panel side-card">
-          <span class="eyebrow">QUICK LINKS</span>
-          <button class="quick-link" data-view="people" type="button"><i data-lucide="users"></i> Find people</button>
-          <button class="quick-link" data-view="profile" type="button"><i data-lucide="settings"></i> Edit profile</button>
-        </div>
+        <div class="panel side-card"><p class="eyebrow">TALKATCH TIP</p><h3>Be yourself.</h3><p class="muted">Good conversations begin with respect.</p></div>
+        <div class="panel side-card"><p class="eyebrow">QUICK ACTIONS</p><button class="quick-link" data-go="people" type="button">＋ Find members</button><button class="quick-link" data-go="messages" type="button">✉ Open messages</button></div>
       </aside>
     </section>
   </main>
