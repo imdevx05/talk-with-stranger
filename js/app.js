@@ -1,4 +1,4 @@
-```javascript
+
 (() => {
   'use strict';
 
@@ -1243,4 +1243,3 @@
     setView
   };
 })();
-```
