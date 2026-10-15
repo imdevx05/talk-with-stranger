@@ -4,112 +4,194 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#090d18">
-  <title>TALKATCH — Connect your world</title>
+  <meta name="theme-color" content="#0b0d18">
+  <meta name="description" content="TALKATCH — meet people, share moments, and find your community.">
+  <title>TALKATCH — Find Your People</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config/config.js"></script>
-  <script src="js/app.js" defer></script>
+  <script defer src="js/app.js"></script>
 </head>
 <body>
-  <main id="authPage" class="auth-page">
-    <section class="auth-card">
-      <a class="brand" href="/">
-        <span class="brand-mark">T</span>
-        <span>TALKATCH</span>
-      </a>
-      <div class="eyebrow">YOUR WORLD. YOUR PEOPLE.</div>
-      <h1 id="authHeading">Welcome back.</h1>
-      <p class="subheading" id="authDescription">Sign in to continue the conversation.</p>
+  <div class="orb orb-one"></div>
+  <div class="orb orb-two"></div>
 
-      <button id="googleButton" class="google-button" type="button">
-        <svg viewBox="0 0 48 48" aria-hidden="true">
-          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" transform="translate(0 4)"/>
-          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.76 7.18l7.73 6C44.42 37.98 46.98 31.91 46.98 24.55z"/>
-          <path fill="#FBBC05" d="M10.53 28.59A14.5 14.5 0 0 1 9.75 24c0-1.59.27-3.13.76-4.59l-7.98-6.2A23.9 23.9 0 0 0 0 24c0 3.87.93 7.52 2.56 10.78z" transform="translate(0 4)"/>
-          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.91-5.8l-7.73-6c-2.14 1.44-4.89 2.3-8.18 2.3-6.26 0-11.57-4.22-13.46-9.91l-7.98 6.2C6.51 42.62 14.62 48 24 48z" transform="translate(0 -4)"/>
-        </svg>
-        Continue with Google
-      </button>
+  <header class="topbar">
+    <a href="#" class="brand" aria-label="TALKATCH home">
+      <span class="brand-icon">T</span> TALKATCH
+    </a>
+    <span class="top-caption">CONNECT BEYOND THE SCROLL</span>
+  </header>
 
-      <div class="separator"><span>OR CONTINUE WITH EMAIL</span></div>
-
-      <form id="authForm">
-        <div id="displayNameGroup" class="form-field hidden">
-          <label for="displayName">Display name</label>
-          <input id="displayName" maxlength="40" autocomplete="name" placeholder="Your name">
+  <main>
+    <section id="authView" class="auth-layout">
+      <div class="hero">
+        <div class="eyebrow"><span class="live-dot"></span> YOUR NEXT CONVERSATION STARTS HERE</div>
+        <h1>Your people.<br>Your stories.<br><span>Your space.</span></h1>
+        <p>Meet new people, share your thoughts, and create meaningful connections in one place.</p>
+        <div class="hero-features">
+          <span>✦ Community feed</span>
+          <span>◎ Discover people</span>
+          <span>♡ Real connections</span>
         </div>
-        <div class="form-field">
-          <label for="email">Email address</label>
-          <input id="email" type="email" autocomplete="email" required placeholder="you@example.com">
-        </div>
-        <div class="form-field">
-          <label for="password">Password</label>
-          <input id="password" type="password" autocomplete="current-password" minlength="6" required placeholder="At least 6 characters">
-        </div>
-        <button id="submitAuth" class="primary-button" type="submit">Sign in</button>
-      </form>
-
-      <p id="authMessage" class="message" role="status" aria-live="polite"></p>
-      <p class="switch-line">
-        <span id="switchLabel">New to TALKATCH?</span>
-        <button id="switchMode" class="link-button" type="button">Create account</button>
-      </p>
-      <p class="legal">By continuing, you agree to use TALKATCH respectfully and protect other users' privacy.</p>
-    </section>
-  </main>
-
-  <main id="dashboard" class="dashboard hidden">
-    <aside class="sidebar">
-      <a class="brand" href="#"><span class="brand-mark">T</span><span>TALKATCH</span></a>
-      <div class="nav-label">WORKSPACE</div>
-      <button class="nav-button selected" data-tab="feed"><span>⌂</span> Home feed</button>
-      <button class="nav-button" data-tab="people"><span>◎</span> Discover people</button>
-      <button class="nav-button" data-tab="profile"><span>◉</span> My profile</button>
-      <div class="sidebar-bottom">
-        <div id="sidebarUser" class="user-summary"></div>
-        <button id="logoutButton" class="nav-button logout"><span>↪</span> Sign out</button>
+        <div class="hero-foot">A better place to be yourself.</div>
       </div>
-    </aside>
 
-    <section class="dashboard-main">
-      <header class="topbar">
-        <div><div class="eyebrow">YOUR COMMUNITY</div><h1 id="viewTitle">Home feed</h1></div>
-        <div id="topUser"></div>
-      </header>
-
-      <section id="feedTab" class="tab-content">
-        <form id="postForm" class="panel composer">
-          <h2>Share a thought</h2>
-          <textarea id="postContent" maxlength="2000" placeholder="What's happening in your world?" required></textarea>
-          <div class="composer-footer">
-            <span class="muted">Keep it kind. Keep it real.</span>
-            <button class="primary-button compact" type="submit">Publish post</button>
-          </div>
-          <p id="postMessage" class="message"></p>
-        </form>
-        <div id="feedList"></div>
-      </section>
-
-      <section id="peopleTab" class="tab-content hidden">
-        <div class="panel">
-          <h2>Find your people</h2>
-          <input id="peopleQuery" class="search-box" placeholder="Search display names and usernames">
+      <div class="auth-card">
+        <div class="auth-tabs">
+          <button type="button" class="auth-tab active" data-mode="login">Log in</button>
+          <button type="button" class="auth-tab" data-mode="signup">Create account</button>
         </div>
-        <div id="peopleList" class="people-grid"></div>
-      </section>
+        <h2 id="authTitle">Welcome back</h2>
+        <p id="authSubtitle" class="muted">Sign in to your TALKATCH account.</p>
 
-      <section id="profileTab" class="tab-content hidden">
-        <form id="profileForm" class="panel">
-          <h2>Your profile</h2>
-          <div class="form-field"><label for="profileName">Display name</label><input id="profileName" maxlength="40" required></div>
-          <div class="form-field"><label for="profileBio">About you</label><textarea id="profileBio" maxlength="250" rows="3"></textarea></div>
-          <div class="form-field"><label for="profileAvatar">Avatar URL (HTTPS)</label><input id="profileAvatar" type="url" placeholder="https://..."></div>
-          <button class="primary-button compact" type="submit">Save changes</button>
-          <p id="profileMessage" class="message"></p>
+        <form id="authForm">
+          <label id="usernameField" class="hidden">Username
+            <input id="username" minlength="3" maxlength="24" autocomplete="username" placeholder="your_username">
+            <small>3–24 letters, numbers, or underscores.</small>
+          </label>
+          <label>Email address
+            <input id="email" type="email" required autocomplete="email" placeholder="you@example.com">
+          </label>
+          <label>Password
+            <input id="password" type="password" required minlength="8" autocomplete="current-password" placeholder="At least 8 characters">
+          </label>
+          <button id="authSubmit" type="submit" class="primary wide">
+            <span id="authSubmitText">Log in</span><span>→</span>
+          </button>
         </form>
+
+        <button id="forgotBtn" class="link-button" type="button">Forgot your password?</button>
+        <div id="authMessage" class="message" role="status" aria-live="polite"></div>
+        <div class="security-note">🔒 Email verification enabled · Google sign-in disabled</div>
+      </div>
+    </section>
+
+    <section id="appView" class="app-layout hidden">
+      <aside class="sidebar">
+        <div class="sidebar-profile">
+          <div id="sidebarAvatar" class="avatar">T</div>
+          <div class="sidebar-profile-text">
+            <strong id="sidebarName">TALKATCH member</strong>
+            <span id="sidebarUsername">@member</span>
+          </div>
+        </div>
+
+        <div class="nav-label">YOUR SPACE</div>
+        <button class="nav-item active" data-page="feed"><span>⌂</span> Home feed</button>
+        <button class="nav-item" data-page="people"><span>◎</span> Discover people</button>
+        <button class="nav-item" data-page="profile"><span>◉</span> My profile</button>
+        <button class="nav-item" data-page="notifications"><span>♧</span> Notifications</button>
+        <button class="nav-item" data-page="messages"><span>✉</span> Messages</button>
+        <button id="adminNav" class="nav-item hidden" data-page="admin"><span>⚙</span> Admin panel</button>
+
+        <div class="sidebar-bottom">
+          <div class="connection-status"><span class="live-dot"></span> Connected</div>
+          <button id="logoutBtn" class="logout-button" type="button">Log out ↗</button>
+          <small>© 2026 TALKATCH</small>
+        </div>
+      </aside>
+
+      <section class="content-area">
+        <header class="page-header">
+          <div>
+            <div class="eyebrow">YOUR COMMUNITY</div>
+            <h2 id="pageTitle">Home feed</h2>
+          </div>
+          <button id="refreshBtn" class="secondary" type="button">↻ Refresh</button>
+        </header>
+
+        <section id="page-feed" class="page">
+          <form id="postForm" class="composer">
+            <div class="composer-top">
+              <div id="composerAvatar" class="avatar small">T</div>
+              <textarea id="postContent" maxlength="2000" required placeholder="What's on your mind? Share something with your people…"></textarea>
+            </div>
+            <div class="composer-footer">
+              <span>✦ Make someone's day with a thought.</span>
+              <button class="primary" type="submit">Publish ↗</button>
+            </div>
+          </form>
+          <div id="feedList" class="feed-list">
+            <div class="loading">Loading your community…</div>
+          </div>
+        </section>
+
+        <section id="page-people" class="page hidden">
+          <div class="section-heading">
+            <h3>Find your people</h3>
+            <p class="muted">Discover community members and follow their updates.</p>
+            <input id="peopleSearch" class="search-input" type="search" placeholder="Search usernames and names…">
+          </div>
+          <div id="peopleList" class="people-grid"></div>
+        </section>
+
+        <section id="page-profile" class="page hidden">
+          <div class="profile-card">
+            <div class="profile-cover"></div>
+            <div class="profile-content">
+              <div id="profileAvatar" class="avatar profile-avatar">T</div>
+              <h3>Your profile</h3>
+              <p class="muted">Make your corner of TALKATCH feel like you.</p>
+              <form id="profileForm" class="profile-form">
+                <label>Display name
+                  <input id="displayName" maxlength="50" placeholder="Your name">
+                </label>
+                <label>Username
+                  <input id="profileUsername" minlength="3" maxlength="24" required>
+                </label>
+                <label>Bio
+                  <textarea id="bio" maxlength="240" placeholder="Tell people a little about yourself…"></textarea>
+                </label>
+                <label>Avatar image URL
+                  <input id="avatarUrl" type="url" placeholder="https://example.com/avatar.jpg">
+                </label>
+                <button class="primary" type="submit">Save changes</button>
+              </form>
+              <div id="profileMessage" class="message" role="status"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="page-notifications" class="page hidden">
+          <div class="section-heading">
+            <h3>Your notifications</h3>
+            <p class="muted">Updates addressed to your account.</p>
+          </div>
+          <div id="notificationsList" class="feed-list"></div>
+        </section>
+
+        <section id="page-messages" class="page hidden">
+          <div class="empty-state">
+            <div class="empty-symbol">✉</div>
+            <h3>Your next conversation is waiting</h3>
+            <p>The database supports conversation and message records, but secure conversation creation and member management require a trusted server-side function. Direct messaging is not enabled in this frontend yet.</p>
+          </div>
+        </section>
+
+        <section id="page-admin" class="page hidden">
+          <div class="section-heading">
+            <h3>Admin overview</h3>
+            <p class="muted">Basic statistics for your community.</p>
+          </div>
+          <div class="stats-grid">
+            <article class="stat-card"><span>Total profiles</span><strong id="statUsers">—</strong></article>
+            <article class="stat-card"><span>Total posts</span><strong id="statPosts">—</strong></article>
+            <article class="stat-card"><span>Open reports</span><strong id="statReports">—</strong></article>
+          </div>
+          <div class="admin-notice">This is a basic overview. Account bans, report resolution, and destructive admin actions must be implemented with secure server-side authorization.</div>
+        </section>
+
+        <footer class="footer">
+          <span>TALKATCH · Be kind. Stay curious.</span>
+          <span>Made for meaningful connections.</span>
+        </footer>
       </section>
     </section>
   </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
