@@ -1,3 +1,57 @@
-h1 {
-    color: blue:
+```css
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
 }
+
+body {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: Arial, sans-serif;
+    background: linear-gradient(135deg, #101026, #33205b);
+    color: white;
+    text-align: center;
+}
+
+.container {
+    padding: 30px;
+    width: 90%;
+    max-width: 600px;
+}
+
+h1 {
+    font-size: clamp(2rem, 6vw, 3.5rem);
+    margin-bottom: 15px;
+}
+
+h2 {
+    color: #bd9aff;
+    margin-bottom: 20px;
+}
+
+p {
+    color: #dedbea;
+    line-height: 1.6;
+    margin-bottom: 30px;
+}
+
+button {
+    padding: 14px 30px;
+    border: none;
+    border-radius: 30px;
+    background: #925cff;
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+button:hover {
+    background: #7540e8;
+    transform: translateY(-2px);
+}
+```
