@@ -514,29 +514,46 @@
     }
   }
 
-  async function loadNotifications() {
-    const container = $("#notifications-list");
-    try {
-      const { data, error } = await supabase.from("notifications")
-        .select("id, type, message, created_at, is_read")
-        .eq("user_id", currentUser.id).order("created_at", { ascending: false }).limit(50);
-      if (error) throw error;
-      const rows = data || [];
-      const unread = rows.filter(row => !row.is_read).length;
-      $("#notification-count").textContent = String(unread);
-      $("#notification-count").classList.toggle("hidden", unread === 0);
-      container.innerHTML = rows.length ? rows.map(row => `
-        <article class="panel post-card">
-          <strong>${escapeHTML(row.type || "Notification")}</strong>
-          <p>${escapeHTML(row.message || "You have a new notification.")}</p>
-          <div class="post-meta">${escapeHTML(formatDate(row.created_at))}${row.is_read ? " · Read" : " · Unread"}</div>
-        </article>`).join("") :
-        '<div class="panel empty-state">You’re all caught up. Notifications will appear here when available.</div>';
-    } catch (error) {
-      container.innerHTML = '<div class="panel empty-state">Notifications are not available. Check your notifications table and RLS policies.</div>';
-      showError(error, "Notifications error");
-    }
+  
+async function loadNotifications() {
+  const box = document.querySelector('#notifications');
+  box.innerHTML = '<div class="panel">Loading notifications…</div>';
+
+  const { data, error } = await db
+    .from('notifications')
+    .select('*')
+    .eq('user_id', state.user.id)
+    .order('created_at', { ascending: false })
+    .limit(50);
+
+  if (error) {
+    console.error('TALKATCH notifications error:', error);
+    box.innerHTML = `
+      <div class="panel">
+        Notifications could not load: ${
+          esc(error.message)
+        }
+      </div>`;
+    return;
   }
+
+  if (!data || data.length === 0) {
+    box.innerHTML = '<div class="panel">No notifications yet.</div>';
+    return;
+  }
+
+  box.innerHTML = data.map(n => `
+    <article class="post">
+      <strong>${esc(n.message || n.type || 'Notification')}</strong>
+      <p>${esc(
+        n.created_at
+          ? new Date(n.created_at).toLocaleString()
+          : ''
+      )}</p>
+    </article>
+  `).join('');
+}
+
 
   async function markAllRead() {
     try {
