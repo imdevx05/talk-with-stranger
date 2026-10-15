@@ -1,30 +1,18 @@
-
-/* =========================================================
-   TALKATCH — app.js
-   Requires:
-   1. config.js loaded before this file
-   2. Supabase JS v2 loaded in your HTML
-   3. Matching Supabase tables and RLS policies
-========================================================= */
-
 (() => {
-  "use strict";
+  'use strict';
 
-  const config = window.TALKATCH_CONFIG;
+  const cfg = window.TALKATCH_CONFIG;
 
-  if (!config?.supabaseUrl || !config?.supabasePublishableKey) {
-    console.error("TALKATCH: Missing Supabase configuration in config.js");
-    return;
-  }
-
-  if (!window.supabase?.createClient) {
-    console.error("TALKATCH: Supabase JS library is missing.");
+  if (!cfg?.supabaseUrl ||
+      !cfg?.supabasePublishableKey ||
+      !window.supabase?.createClient) {
+    console.error('TALKATCH: Check config.js and Supabase JS.');
     return;
   }
 
   const db = window.supabase.createClient(
-    config.supabaseUrl,
-    config.supabasePublishableKey,
+    cfg.supabaseUrl,
+    cfg.supabasePublishableKey,
     {
       auth: {
         persistSession: true,
@@ -34,164 +22,248 @@
     }
   );
 
-  window.talkatchDB = db;
-
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
   const state = {
     user: null,
     profile: null,
-    busy: false
+    view: 'feed'
   };
 
-  const redirectURL = window.location.origin + "/";
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[c]);
 
-  /* -------------------- UI HELPERS -------------------- */
+  const initials = s => (s || 'T').trim().slice(0, 1).toUpperCase();
 
-  function showMessage(message, type = "info") {
-    let box = $("#app-message");
+  const val = (form, name) =>
+    String(new FormData(form).get(name) || '').trim();
 
-    if (!box) {
-      box = document.createElement("div");
-      box.id = "app-message";
-      box.setAttribute("role", "status");
-      box.style.cssText = [
-        "position:fixed",
-        "left:50%",
-        "bottom:22px",
-        "transform:translateX(-50%)",
-        "z-index:99999",
-        "max-width:90%",
-        "padding:13px 18px",
-        "border-radius:12px",
-        "font:14px system-ui,sans-serif",
-        "box-shadow:0 8px 30px #0004"
-      ].join(";");
+  function toast(message, error = false) {
+    const t = $('#toast');
+    t.textContent = message;
+    t.classList.toggle('error', error);
+    t.style.display = 'block';
 
-      document.body.appendChild(box);
-    }
-
-    box.textContent = message;
-    box.style.background =
-      type === "error" ? "#7f1d1d" :
-      type === "success" ? "#14532d" : "#27272a";
-    box.style.color = "#fff";
-    box.style.display = "block";
-
-    clearTimeout(showMessage.timer);
-    showMessage.timer = setTimeout(() => {
-      box.style.display = "none";
-    }, 6000);
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => {
+      t.style.display = 'none';
+    }, 5000);
   }
 
-  function setBusy(form, busy) {
-    if (!form) return;
+  function errorText(e) {
+    const m = e?.message || 'Something went wrong.';
 
-    form.querySelectorAll(
-      'button[type="submit"], input[type="submit"]'
-    ).forEach((button) => {
-      button.disabled = busy;
+    if (/invalid login credentials/i.test(m))
+      return 'Incorrect email or password.';
+
+    if (/email not confirmed/i.test(m))
+      return 'Confirm your email before logging in.';
+
+    if (/already registered/i.test(m))
+      return 'That email is already registered. Try logging in.';
+
+    if (/rate limit/i.test(m))
+      return 'Too many attempts. Please wait and try again.';
+
+    return m;
+  }
+
+  function showAuth(tab = 'login') {
+    $('#auth').hidden = false;
+    $('#app').hidden = true;
+    $('#mobile').hidden = true;
+
+    $$('[data-tab]').forEach(b => {
+      b.classList.toggle('active', b.dataset.tab === tab);
     });
+
+    $('#loginForm').hidden = tab !== 'login';
+    $('#signupForm').hidden = tab !== 'signup';
   }
 
-  function value(form, ...names) {
-    for (const name of names) {
-      const field = form?.querySelector(
-        `[name="${name}"], #${CSS.escape(name)}`
+  function avatar(img, fallback, url, name) {
+    img.hidden = !url;
+    fallback.hidden = !!url;
+    fallback.textContent = initials(name);
+
+    if (url) img.src = url;
+
+    img.onerror = () => {
+      img.hidden = true;
+      fallback.hidden = false;
+    };
+  }
+
+  function theme(value) {
+    document.body.dataset.theme = value;
+    localStorage.setItem('talkatch-theme', value);
+  }
+
+  function accent(color) {
+    document.documentElement.style.setProperty('--accent', color);
+    localStorage.setItem('talkatch-accent', color);
+  }
+
+  async function ensureProfile(user, username = '') {
+    const existing = await db
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (existing.error) throw existing.error;
+    if (existing.data) return existing.data;
+
+    const u = username ||
+      user.user_metadata?.username ||
+      user.email.split('@')[0];
+
+    const result = await db
+      .from('profiles')
+      .insert({
+        id: user.id,
+        username: u,
+        display_name: user.user_metadata?.display_name || u,
+        bio: '',
+        avatar_url: null
+      })
+      .select()
+      .single();
+
+    if (result.error) {
+      const retry = await db
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (retry.data) return retry.data;
+      throw result.error;
+    }
+
+    return result.data;
+  }
+
+  async function loadProfile() {
+    const result = await db
+      .from('profiles')
+      .select('*')
+      .eq('id', state.user.id)
+      .maybeSingle();
+
+    if (result.error) throw result.error;
+
+    state.profile = result.data ||
+      await ensureProfile(state.user);
+
+    const p = state.profile;
+    const name = p.display_name || p.username || state.user.email;
+
+    $('#sideName').textContent = name;
+    $('#sideHandle').textContent = '@' + (p.username || 'user');
+
+    avatar(
+      $('#sidePhoto'),
+      $('#sideInitial'),
+      p.avatar_url,
+      name
+    );
+
+    $('#composeInitial').textContent = initials(name);
+
+    $('#profileForm').elements.username.value = p.username || '';
+    $('#profileForm').elements.display_name.value = p.display_name || '';
+    $('#profileForm').elements.bio.value = p.bio || '';
+
+    avatar(
+      $('#profilePhoto'),
+      $('#profileInitial'),
+      p.avatar_url,
+      name
+    );
+  }
+
+  function setView(name) {
+    state.view = name;
+
+    $$('.view').forEach(view => {
+      view.hidden = view.id !== name + 'View';
+    });
+
+    $$('[data-view]').forEach(button => {
+      button.classList.toggle(
+        'selected',
+        button.dataset.view === name
       );
+    });
 
-      if (field && typeof field.value === "string") {
-        return field.value.trim();
-      }
-    }
+    if (name === 'feed') loadFeed();
+    if (name === 'discover') loadPeople();
+    if (name === 'notifications') loadNotifications();
 
-    return "";
-  }
-
-  function setText(selector, text) {
-    const element = $(selector);
-    if (element) element.textContent = text ?? "";
-  }
-
-  function toggle(selector, visible) {
-    const element = $(selector);
-    if (element) {
-      element.hidden = !visible;
+    if (name === 'profile') {
+      loadProfile().catch(e => toast(errorText(e), true));
     }
   }
 
-  function escapeHTML(input) {
-    return String(input ?? "").replace(/[&<>"']/g, (character) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    })[character]);
-  }
+  async function init(session) {
+    state.user = session?.user || null;
 
-  function friendlyError(error) {
-    const message = error?.message || "Something went wrong.";
-
-    if (/invalid login credentials/i.test(message)) {
-      return "Incorrect email or password.";
-    }
-
-    if (/email not confirmed/i.test(message)) {
-      return "Please confirm your email before logging in.";
-    }
-
-    if (/user already registered/i.test(message)) {
-      return "This email is already registered. Try logging in.";
-    }
-
-    if (/rate limit/i.test(message)) {
-      return "Too many attempts. Please wait before trying again.";
-    }
-
-    return message;
-  }
-
-  /* -------------------- AUTHENTICATION -------------------- */
-
-  async function signUp(event) {
-    event?.preventDefault();
-
-    const form = event?.currentTarget || $("#signupForm");
-    if (!form || state.busy) return;
-
-    const username = value(form, "username");
-    const email = value(form, "email").toLowerCase();
-    const password = value(form, "password");
-
-    if (!/^[a-zA-Z0-9_]{3,24}$/.test(username)) {
-      showMessage(
-        "Username must be 3–24 characters using letters, numbers, or underscores.",
-        "error"
-      );
+    if (!state.user) {
+      showAuth();
       return;
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      showMessage("Enter a valid email address.", "error");
-      return;
+    $('#auth').hidden = true;
+    $('#app').hidden = false;
+    $('#mobile').hidden = false;
+
+    try {
+      await loadProfile();
+      setView(state.view);
+    } catch (e) {
+      console.error(e);
+      toast(
+        'Signed in, but profile loading failed: ' + errorText(e),
+        true
+      );
+    }
+  }
+
+  async function signup(e) {
+    e.preventDefault();
+
+    const form = e.currentTarget;
+    const username = val(form, 'username');
+    const email = val(form, 'email').toLowerCase();
+    const password = val(form, 'password');
+
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
+      return toast(
+        'Username must be 3–24 letters, numbers, or underscores.',
+        true
+      );
     }
 
     if (password.length < 8) {
-      showMessage("Password must be at least 8 characters.", "error");
-      return;
+      return toast('Password must be at least 8 characters.', true);
     }
 
-    state.busy = true;
-    setBusy(form, true);
+    const button = $('button[type=submit]', form);
+    button.disabled = true;
 
     try {
       const { data, error } = await db.auth.signUp({
         email,
         password,
         options: {
-          emailRedirectTo: redirectURL,
+          emailRedirectTo: location.origin + '/',
           data: {
             username,
             display_name: username
@@ -201,805 +273,583 @@
 
       if (error) throw error;
 
-      /*
-       * A database trigger should create profiles automatically.
-       * If email confirmation is enabled, there may be no session yet.
-       */
-      if (data.user && data.session) {
+      if (data.session) {
         await ensureProfile(data.user, username);
-        showMessage("Account created successfully!", "success");
-        await initializeApp(data.session);
+        await init(data.session);
+        toast('Account created.');
       } else {
-        showMessage(
-          "Account submitted. Check your email and click the confirmation link before logging in.",
-          "success"
+        toast(
+          'Account submitted. Check your email and click the confirmation link before logging in.'
         );
       }
-    } catch (error) {
-      console.error("Signup failed:", error);
-      showMessage(friendlyError(error), "error");
+    } catch (e) {
+      console.error(e);
+      toast(errorText(e), true);
     } finally {
-      state.busy = false;
-      setBusy(form, false);
+      button.disabled = false;
     }
   }
 
-  async function logIn(event) {
-    event?.preventDefault();
+  async function login(e) {
+    e.preventDefault();
 
-    const form = event?.currentTarget || $("#loginForm");
-    if (!form || state.busy) return;
-
-    const email = value(form, "email").toLowerCase();
-    const password = value(form, "password");
-
-    if (!email || !password) {
-      showMessage("Enter your email and password.", "error");
-      return;
-    }
-
-    state.busy = true;
-    setBusy(form, true);
+    const form = e.currentTarget;
+    const button = $('button[type=submit]', form);
+    button.disabled = true;
 
     try {
       const { data, error } = await db.auth.signInWithPassword({
-        email,
-        password
+        email: val(form, 'email').toLowerCase(),
+        password: val(form, 'password')
       });
 
       if (error) throw error;
 
-      if (!data.session || !data.user) {
-        throw new Error("Login succeeded but no session was returned.");
-      }
-
-      await initializeApp(data.session);
-      showMessage("Welcome back!", "success");
-    } catch (error) {
-      console.error("Login failed:", error);
-      showMessage(friendlyError(error), "error");
+      await init(data.session);
+      toast('Welcome back.');
+    } catch (e) {
+      console.error(e);
+      toast(errorText(e), true);
     } finally {
-      state.busy = false;
-      setBusy(form, false);
+      button.disabled = false;
     }
   }
 
-  async function logOut() {
-    try {
-      /*
-       * Local scope signs out this browser session.
-       * It does not delete the user's account or profile.
-       */
-      const { error } = await db.auth.signOut({ scope: "local" });
+  async function logout() {
+    const { error } = await db.auth.signOut({ scope: 'local' });
 
-      if (error) throw error;
+    if (error) return toast(errorText(error), true);
 
-      state.user = null;
-      state.profile = null;
-
-      window.location.replace(redirectURL);
-    } catch (error) {
-      console.error("Logout failed:", error);
-      showMessage(friendlyError(error), "error");
-    }
+    state.user = null;
+    state.profile = null;
+    showAuth('login');
+    toast('Logged out. Your account remains saved.');
   }
 
-  async function resetPassword(event) {
-    event?.preventDefault();
+  async function reset() {
+    const email = prompt('Enter your account email:');
+    if (!email) return;
 
-    const emailField = $("#resetEmail") || $('[name="email"]');
-    const email = emailField?.value?.trim().toLowerCase();
+    const { error } = await db.auth.resetPasswordForEmail(
+      email.trim().toLowerCase(),
+      { redirectTo: location.origin + '/' }
+    );
 
-    if (!email) {
-      showMessage("Enter your email address first.", "error");
-      return;
+    if (error) return toast(errorText(error), true);
+
+    toast('If the account exists, a password reset email has been requested.');
+  }
+
+  async function saveProfile(e) {
+    e.preventDefault();
+
+    const form = e.currentTarget;
+    const username = val(form, 'username');
+
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
+      return toast(
+        'Username must be 3–24 letters, numbers, or underscores.',
+        true
+      );
     }
 
-    try {
-      const { error } = await db.auth.resetPasswordForEmail(email, {
-        redirectTo: redirectURL
+    const { data, error } = await db
+      .from('profiles')
+      .update({
+        username,
+        display_name: val(form, 'display_name') || username,
+        bio: val(form, 'bio')
+      })
+      .eq('id', state.user.id)
+      .select()
+      .single();
+
+    if (error) return toast(errorText(error), true);
+
+    state.profile = data;
+    await loadProfile();
+    toast('Profile saved.');
+  }
+
+  async function uploadPhoto(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      return toast('Choose a JPG, PNG, or WebP image.', true);
+    }
+
+    if (file.size > 3 * 1024 * 1024) {
+      return toast('Image must be under 3 MB.', true);
+    }
+
+    const ext = file.type === 'image/png'
+      ? 'png'
+      : file.type === 'image/webp'
+        ? 'webp'
+        : 'jpg';
+
+    const path = `${state.user.id}/avatar-${Date.now()}.${ext}`;
+
+    const upload = await db.storage
+      .from('avatars')
+      .upload(path, file, {
+        upsert: true,
+        contentType: file.type
       });
 
-      if (error) throw error;
-
-      showMessage("If the account exists, a password reset email has been requested.", "success");
-    } catch (error) {
-      console.error("Password reset failed:", error);
-      showMessage(friendlyError(error), "error");
-    }
-  }
-
-  /* -------------------- PROFILE -------------------- */
-
-  async function ensureProfile(user, preferredUsername = "") {
-    if (!user) return null;
-
-    const metadata = user.user_metadata || {};
-    const username =
-      preferredUsername ||
-      metadata.username ||
-      (user.email ? user.email.split("@")[0] : "user");
-
-    /*
-     * Requires profiles.id to reference auth.users.id.
-     * Do not overwrite existing profiles during login.
-     */
-    const { data: existing, error: findError } = await db
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (findError) {
-      console.error("Profile lookup failed:", findError);
-      throw new Error(
-        "Could not load your profile. Check the profiles table and its RLS policies."
+    if (upload.error) {
+      console.error(upload.error);
+      return toast(
+        "Upload failed. Create the public 'avatars' bucket and configure its Storage policies in Supabase.",
+        true
       );
     }
 
-    if (existing) return existing;
+    const url = db.storage
+      .from('avatars')
+      .getPublicUrl(path).data.publicUrl;
 
-    const { data: created, error: createError } = await db
-      .from("profiles")
-      .insert({
-        id: user.id,
-        username,
-        display_name: metadata.display_name || username,
-        avatar_url: null,
-        bio: ""
-      })
+    const { data, error } = await db
+      .from('profiles')
+      .update({ avatar_url: url })
+      .eq('id', state.user.id)
       .select()
       .single();
 
-    if (createError) {
-      /*
-       * A database trigger may have created the row between the
-       * lookup and insert. Try loading it again before reporting failure.
-       */
-      const { data: retry } = await db
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (retry) return retry;
-
-      console.error("Profile creation failed:", createError);
-      throw new Error(
-        "Your login worked, but your profile could not be created. Check your profiles table and RLS policies."
-      );
-    }
-
-    return created;
-  }
-
-  async function loadProfile() {
-    if (!state.user) return null;
-
-    const { data, error } = await db
-      .from("profiles")
-      .select("*")
-      .eq("id", state.user.id)
-      .maybeSingle();
-
-    if (error) {
-      console.error("Loading profile failed:", error);
-      return null;
-    }
+    if (error) return toast(errorText(error), true);
 
     state.profile = data;
-
-    setText("#profileUsername", data?.username || "");
-    setText("#profileDisplayName", data?.display_name || data?.username || "");
-    setText("#profileBio", data?.bio || "");
-
-    const avatar = $("#profileAvatar");
-
-    if (avatar && data?.avatar_url) {
-      if (avatar.tagName === "IMG") {
-        avatar.src = data.avatar_url;
-      } else {
-        avatar.style.backgroundImage = `url("${data.avatar_url}")`;
-      }
-    }
-
-    return data;
-  }
-
-  async function saveProfile(event) {
-    event?.preventDefault();
-
-    if (!state.user) {
-      showMessage("Please log in first.", "error");
-      return;
-    }
-
-    const form = event?.currentTarget || $("#profileForm");
-    if (!form) return;
-
-    const username = value(form, "username");
-    const displayName = value(form, "display_name", "displayName");
-    const bio = value(form, "bio");
-
-    if (username && !/^[a-zA-Z0-9_]{3,24}$/.test(username)) {
-      showMessage("Username must be 3–24 letters, numbers, or underscores.", "error");
-      return;
-    }
-
-    const updates = {
-      bio,
-      display_name: displayName || username || state.profile?.display_name
-    };
-
-    if (username) updates.username = username;
-
-    const { data, error } = await db
-      .from("profiles")
-      .update(updates)
-      .eq("id", state.user.id)
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Saving profile failed:", error);
-      showMessage(friendlyError(error), "error");
-      return;
-    }
-
-    state.profile = data;
-    showMessage("Profile saved.", "success");
     await loadProfile();
+    toast('Profile photo updated.');
+    e.target.value = '';
   }
 
-  /* -------------------- FEED -------------------- */
+  async function createPost(e) {
+    e.preventDefault();
+
+    const content = val(e.currentTarget, 'content');
+    if (!content) return;
+
+    const { error } = await db
+      .from('posts')
+      .insert({
+        user_id: state.user.id,
+        content
+      });
+
+    if (error) return toast(errorText(error), true);
+
+    e.currentTarget.reset();
+    await loadFeed();
+    toast('Post published.');
+  }
 
   async function loadFeed() {
-    const container = $("#feedList") || $("#postsList") || $("#feed");
-    if (!container) return;
+    const box = $('#feed');
+    box.innerHTML = '<div class="panel">Loading posts…</div>';
 
     const { data: posts, error } = await db
-      .from("posts")
-      .select(`
-        id,
-        user_id,
-        content,
-        created_at,
-        profiles:user_id (username, display_name, avatar_url)
-      `)
-      .order("created_at", { ascending: false })
+      .from('posts')
+      .select('id,user_id,content,created_at')
+      .order('created_at', { ascending: false })
       .limit(50);
 
     if (error) {
-      console.error("Loading feed failed:", error);
-      container.textContent = "Unable to load posts. Check your posts table and RLS policies.";
+      console.error(error);
+      box.innerHTML =
+        '<div class="panel">Unable to load posts. Check your posts table and RLS policies.</div>';
       return;
     }
 
     if (!posts?.length) {
-      container.textContent = "No posts yet. Be the first to share something!";
+      box.innerHTML =
+        '<div class="panel">No posts yet. Share the first update.</div>';
       return;
     }
 
-    container.innerHTML = posts.map((post) => `
-      <article class="talkatch-post" data-post-id="${escapeHTML(post.id)}">
-        <header class="post-header">
-          <strong>${escapeHTML(
-            post.profiles?.display_name ||
-            post.profiles?.username ||
-            "User"
-          )}</strong>
-          <small>${escapeHTML(
-            post.created_at ? new Date(post.created_at).toLocaleString() : ""
-          )}</small>
-        </header>
-        <p>${escapeHTML(post.content)}</p>
-        <div class="post-actions">
-          <button type="button" data-action="like" data-id="${escapeHTML(post.id)}">Like</button>
-          <button type="button" data-action="comments" data-id="${escapeHTML(post.id)}">Comments</button>
-          <button type="button" data-action="follow" data-user="${escapeHTML(post.user_id)}">Follow</button>
+    const ids = [...new Set(posts.map(p => p.user_id))];
+    const postIds = posts.map(p => p.id);
+
+    const [profilesResult, likesResult] = await Promise.all([
+      db.from('profiles')
+        .select('id,username,display_name,avatar_url')
+        .in('id', ids),
+
+      db.from('likes')
+        .select('post_id,user_id')
+        .in('post_id', postIds)
+    ]);
+
+    const people = Object.fromEntries(
+      (profilesResult.data || []).map(p => [p.id, p])
+    );
+
+    const likes = likesResult.data || [];
+
+    box.innerHTML = posts.map(post => {
+      const person = people[post.user_id] || {};
+      const name = person.display_name || person.username || 'Member';
+
+      const liked = likes.some(like =>
+        like.post_id === post.id &&
+        like.user_id === state.user.id
+      );
+
+      const count = likes.filter(
+        like => like.post_id === post.id
+      ).length;
+
+      return `
+        <article class="post" data-post="${esc(post.id)}">
+          <header class="posthead">
+            <div class="avatar">
+              ${person.avatar_url
+                ? `<img src="${esc(person.avatar_url)}" alt="">`
+                : esc(initials(name))}
+            </div>
+            <div>
+              <strong>${esc(name)}</strong>
+              <small>
+                @${esc(person.username || 'member')} ·
+                ${esc(post.created_at
+                  ? new Date(post.created_at).toLocaleString()
+                  : '')}
+              </small>
+            </div>
+          </header>
+
+          <p class="posttext">${esc(post.content)}</p>
+
+          <div class="actions">
+            <button data-action="like"
+                    data-id="${esc(post.id)}"
+                    data-liked="${liked}">
+              <i data-lucide="heart"></i>
+              ${liked ? 'Liked' : 'Like'} · ${count}
+            </button>
+
+            <button data-action="comments" data-id="${esc(post.id)}">
+              <i data-lucide="message-circle"></i> Comment
+            </button>
+          </div>
+
+          <div class="comments" hidden></div>
+        </article>
+      `;
+    }).join('');
+
+    window.lucide?.createIcons();
+  }
+
+  async function like(id, button) {
+    const liked = button.dataset.liked === 'true';
+
+    const result = liked
+      ? await db.from('likes')
+          .delete()
+          .eq('post_id', id)
+          .eq('user_id', state.user.id)
+      : await db.from('likes').insert({
+          post_id: id,
+          user_id: state.user.id
+        });
+
+    if (result.error) return toast(errorText(result.error), true);
+
+    await loadFeed();
+  }
+
+  async function comments(id, article) {
+    const box = $('.comments', article);
+
+    if (!box.hidden) {
+      box.hidden = true;
+      return;
+    }
+
+    box.hidden = false;
+    box.innerHTML = '<p>Loading comments…</p>';
+
+    const { data, error } = await db
+      .from('comments')
+      .select('id,user_id,content,created_at')
+      .eq('post_id', id)
+      .order('created_at');
+
+    if (error) {
+      box.innerHTML =
+        '<p>Comments unavailable. Check the comments table and policies.</p>';
+      return;
+    }
+
+    const ids = [...new Set((data || []).map(c => c.user_id))];
+
+    const result = ids.length
+      ? await db.from('profiles')
+          .select('id,username,display_name')
+          .in('id', ids)
+      : { data: [] };
+
+    const people = Object.fromEntries(
+      (result.data || []).map(p => [p.id, p])
+    );
+
+    box.innerHTML =
+      (data || []).map(comment => `
+        <div class="comment">
+          <strong>
+            ${esc(
+              people[comment.user_id]?.display_name ||
+              people[comment.user_id]?.username ||
+              'Member'
+            )}
+          </strong>
+          ${esc(comment.content)}
         </div>
-        <div class="post-comments" hidden></div>
-      </article>
-    `).join("");
-
-    await loadLikeCounts(posts);
-  }
-
-  async function createPost(event) {
-    event?.preventDefault();
-
-    if (!state.user) {
-      showMessage("Please log in to publish a post.", "error");
-      return;
-    }
-
-    const form = event?.currentTarget || $("#postForm");
-    const content = value(form, "content", "postContent");
-
-    if (!content) {
-      showMessage("Write something before publishing.", "error");
-      return;
-    }
-
-    const { error } = await db.from("posts").insert({
-      user_id: state.user.id,
-      content
-    });
-
-    if (error) {
-      console.error("Creating post failed:", error);
-      showMessage(friendlyError(error), "error");
-      return;
-    }
-
-    const field = form?.querySelector('[name="content"], #postContent');
-    if (field) field.value = "";
-
-    showMessage("Post published.", "success");
-    await loadFeed();
-  }
-
-  /* -------------------- LIKES -------------------- */
-
-  async function loadLikeCounts(posts) {
-    if (!posts?.length) return;
-
-    const ids = posts.map((post) => post.id);
-
-    const { data, error } = await db
-      .from("likes")
-      .select("post_id,user_id")
-      .in("post_id", ids);
-
-    if (error) {
-      console.warn("Like counts unavailable:", error.message);
-      return;
-    }
-
-    const counts = {};
-    const liked = new Set();
-
-    for (const like of data || []) {
-      counts[like.post_id] = (counts[like.post_id] || 0) + 1;
-
-      if (like.user_id === state.user?.id) {
-        liked.add(like.post_id);
-      }
-    }
-
-    $$(".talkatch-post").forEach((article) => {
-      const id = article.dataset.postId;
-      const button = article.querySelector('[data-action="like"]');
-
-      if (!button) return;
-
-      button.textContent =
-        `${liked.has(id) ? "Unlike" : "Like"} (${counts[id] || 0})`;
-
-      button.dataset.liked = liked.has(id) ? "true" : "false";
-    });
-  }
-
-  async function toggleLike(postId, button) {
-    if (!state.user) {
-      showMessage("Please log in to like posts.", "error");
-      return;
-    }
-
-    const alreadyLiked = button?.dataset.liked === "true";
-
-    if (alreadyLiked) {
-      const { error } = await db
-        .from("likes")
-        .delete()
-        .eq("post_id", postId)
-        .eq("user_id", state.user.id);
-
-      if (error) {
-        showMessage(friendlyError(error), "error");
-        return;
-      }
-    } else {
-      const { error } = await db.from("likes").insert({
-        post_id: postId,
-        user_id: state.user.id
-      });
-
-      if (error && !/duplicate key/i.test(error.message)) {
-        showMessage(friendlyError(error), "error");
-        return;
-      }
-    }
-
-    await loadFeed();
-  }
-
-  /* -------------------- COMMENTS -------------------- */
-
-  async function loadComments(postId, article) {
-    const container = article?.querySelector(".post-comments");
-    if (!container) return;
-
-    container.hidden = false;
-    container.textContent = "Loading comments…";
-
-    const { data, error } = await db
-      .from("comments")
-      .select(`
-        id,
-        content,
-        created_at,
-        user_id,
-        profiles:user_id (username, display_name)
-      `)
-      .eq("post_id", postId)
-      .order("created_at", { ascending: true });
-
-    if (error) {
-      console.error("Loading comments failed:", error);
-      container.textContent = "Unable to load comments.";
-      return;
-    }
-
-    container.innerHTML = `
-      <div class="comment-list">
-        ${(data || []).map((comment) => `
-          <p>
-            <strong>${escapeHTML(
-              comment.profiles?.display_name ||
-              comment.profiles?.username ||
-              "User"
-            )}</strong>
-            ${escapeHTML(comment.content)}
-          </p>
-        `).join("")}
-      </div>
-      ${state.user ? `
-        <form class="comment-form" data-post-id="${escapeHTML(postId)}">
-          <input name="content" maxlength="2000" placeholder="Write a comment…" required>
-          <button type="submit">Send</button>
+      `).join('') +
+      `
+        <form class="commentform" data-post="${esc(id)}">
+          <input name="content" maxlength="2000"
+                 placeholder="Write a comment…" required>
+          <button aria-label="Send" type="submit">
+            <i data-lucide="send"></i>
+          </button>
         </form>
-      ` : `<p>Log in to comment.</p>`}
-    `;
+      `;
+
+    window.lucide?.createIcons();
   }
 
-  async function createComment(event) {
-    event.preventDefault();
+  async function submitComment(e) {
+    e.preventDefault();
 
-    if (!state.user) {
-      showMessage("Please log in to comment.", "error");
-      return;
-    }
-
-    const form = event.target;
-    const postId = form.dataset.postId;
-    const content = value(form, "content");
+    const id = e.currentTarget.dataset.post;
+    const content = val(e.currentTarget, 'content');
 
     if (!content) return;
 
-    const { error } = await db.from("comments").insert({
-      post_id: postId,
+    const { error } = await db.from('comments').insert({
+      post_id: id,
       user_id: state.user.id,
       content
     });
 
-    if (error) {
-      showMessage(friendlyError(error), "error");
-      return;
-    }
+    if (error) return toast(errorText(error), true);
 
-    await loadComments(postId, form.closest(".talkatch-post"));
+    await comments(id, e.currentTarget.closest('.post'));
+    toast('Comment added.');
   }
 
-  /* -------------------- FOLLOWS -------------------- */
+  async function loadPeople(term = '') {
+    const box = $('#people');
+    box.innerHTML = '<div class="panel">Loading people…</div>';
 
-  async function toggleFollow(targetUserId, button) {
-    if (!state.user) {
-      showMessage("Please log in to follow people.", "error");
-      return;
-    }
+    let query = db.from('profiles')
+      .select('id,username,display_name,bio,avatar_url')
+      .order('username')
+      .limit(100);
 
-    if (targetUserId === state.user.id) {
-      showMessage("You cannot follow yourself.", "error");
-      return;
-    }
+    if (term) query = query.ilike('username', `%${term}%`);
 
-    const { data: existing, error: lookupError } = await db
-      .from("follows")
-      .select("follower_id,following_id")
-      .eq("follower_id", state.user.id)
-      .eq("following_id", targetUserId)
-      .maybeSingle();
-
-    if (lookupError) {
-      showMessage(friendlyError(lookupError), "error");
-      return;
-    }
-
-    if (existing) {
-      const { error } = await db
-        .from("follows")
-        .delete()
-        .eq("follower_id", state.user.id)
-        .eq("following_id", targetUserId);
-
-      if (error) {
-        showMessage(friendlyError(error), "error");
-        return;
-      }
-
-      if (button) button.textContent = "Follow";
-    } else {
-      const { error } = await db.from("follows").insert({
-        follower_id: state.user.id,
-        following_id: targetUserId
-      });
-
-      if (error) {
-        showMessage(friendlyError(error), "error");
-        return;
-      }
-
-      if (button) button.textContent = "Following";
-    }
-
-    showMessage("Follow status updated.", "success");
-  }
-
-  /* -------------------- NOTIFICATIONS -------------------- */
-
-  async function loadNotifications() {
-    const container = $("#notificationsList") || $("#notificationList");
-    if (!container || !state.user) return;
-
-    const { data, error } = await db
-      .from("notifications")
-      .select("id,type,message,created_at,is_read")
-      .eq("user_id", state.user.id)
-      .order("created_at", { ascending: false })
-      .limit(50);
+    const { data, error } = await query;
 
     if (error) {
-      console.warn("Notifications unavailable:", error.message);
-      container.textContent = "Notifications are currently unavailable.";
-      return;
-    }
-
-    if (!data?.length) {
-      container.textContent = "No notifications yet.";
-      return;
-    }
-
-    container.innerHTML = data.map((item) => `
-      <article class="talkatch-notification">
-        <p>${escapeHTML(item.message || item.type || "New notification")}</p>
-        <small>${escapeHTML(
-          item.created_at ? new Date(item.created_at).toLocaleString() : ""
-        )}</small>
-      </article>
-    `).join("");
-  }
-
-  /* -------------------- DISCOVER PEOPLE -------------------- */
-
-  async function loadPeople() {
-    const container = $("#peopleList") || $("#discoverList");
-    if (!container) return;
-
-    const { data, error } = await db
-      .from("profiles")
-      .select("id,username,display_name,bio,avatar_url")
-      .order("username")
-      .limit(50);
-
-    if (error) {
-      console.error("Loading people failed:", error);
-      container.textContent = "Unable to load people.";
+      box.innerHTML =
+        '<div class="panel">Unable to load profiles. Check table access.</div>';
       return;
     }
 
     const people = (data || []).filter(
-      (person) => person.id !== state.user?.id
+      person => person.id !== state.user.id
     );
 
     if (!people.length) {
-      container.textContent = "No other users found yet.";
+      box.innerHTML =
+        '<div class="panel">No matching members found.</div>';
       return;
     }
 
-    container.innerHTML = people.map((person) => `
-      <article class="talkatch-person">
-        <strong>${escapeHTML(person.display_name || person.username || "User")}</strong>
-        <p>@${escapeHTML(person.username || "user")}</p>
-        <p>${escapeHTML(person.bio || "")}</p>
-        <button type="button" data-action="follow" data-user="${escapeHTML(person.id)}">
-          Follow
+    const result = await db.from('follows')
+      .select('following_id')
+      .eq('follower_id', state.user.id);
+
+    const following = new Set(
+      (result.data || []).map(row => row.following_id)
+    );
+
+    box.innerHTML = people.map(person => `
+      <article class="person">
+        ${person.avatar_url
+          ? `<img class="avatar" src="${esc(person.avatar_url)}" alt="">`
+          : `<b class="avatar">${esc(initials(person.display_name || person.username))}</b>`}
+
+        <h3>${esc(person.display_name || person.username || 'Member')}</h3>
+        <p>@${esc(person.username || 'member')}</p>
+        <p>${esc(person.bio || 'A TALKATCH community member.')}</p>
+
+        <button class="secondary"
+                data-action="follow"
+                data-user="${esc(person.id)}"
+                data-following="${following.has(person.id)}">
+          ${following.has(person.id) ? 'Following' : 'Follow'}
         </button>
       </article>
-    `).join("");
+    `).join('');
   }
 
-  /* -------------------- APP INITIALIZATION -------------------- */
+  async function follow(id, button) {
+    const isFollowing = button.dataset.following === 'true';
 
-  async function initializeApp(session) {
-    state.user = session?.user || null;
+    const result = isFollowing
+      ? await db.from('follows')
+          .delete()
+          .eq('follower_id', state.user.id)
+          .eq('following_id', id)
+      : await db.from('follows').insert({
+          follower_id: state.user.id,
+          following_id: id
+        });
 
-    if (!state.user) {
-      state.profile = null;
-      toggle("#authSection", true);
-      toggle("#loginSection", true);
-      toggle("#signupSection", false);
-      toggle("#appSection", false);
+    if (result.error) return toast(errorText(result.error), true);
+
+    await loadPeople($('#search').value.trim());
+
+    toast(isFollowing ? 'Unfollowed member.' : 'Now following member.');
+  }
+
+  async function loadNotifications() {
+    const box = $('#notifications');
+
+    const { data, error } = await db.from('notifications')
+      .select('id,type,message,created_at,is_read')
+      .eq('user_id', state.user.id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      box.innerHTML =
+        '<div class="panel">Notifications are unavailable. Check the notifications table and policies.</div>';
       return;
     }
 
-    toggle("#authSection", false);
-    toggle("#appSection", true);
-
-    setText("#currentUserEmail", state.user.email || "");
-
-    try {
-      state.profile = await loadProfile();
-
-      if (!state.profile) {
-        state.profile = await ensureProfile(state.user);
-        await loadProfile();
-      }
-
-      await Promise.allSettled([
-        loadFeed(),
-        loadPeople(),
-        loadNotifications()
-      ]);
-    } catch (error) {
-      console.error("App initialization failed:", error);
-      showMessage(error.message || "Unable to load your profile.", "error");
-    }
+    box.innerHTML = data?.length
+      ? data.map(notification => `
+          <article class="post">
+            <strong>
+              ${esc(notification.message || notification.type || 'Notification')}
+            </strong>
+            <p>
+              ${esc(notification.created_at
+                ? new Date(notification.created_at).toLocaleString()
+                : '')}
+            </p>
+          </article>
+        `).join('')
+      : '<div class="panel">No notifications yet.</div>';
   }
 
-  /* -------------------- EVENT BINDINGS -------------------- */
-
-  document.addEventListener("submit", (event) => {
-    const form = event.target;
-
-    if (form.matches("#signupForm, [data-form='signup']")) {
-      signUp(event);
-    } else if (form.matches("#loginForm, [data-form='login']")) {
-      logIn(event);
-    } else if (form.matches("#postForm, [data-form='post']")) {
-      createPost(event);
-    } else if (form.matches("#profileForm, [data-form='profile']")) {
-      saveProfile(event);
-    } else if (form.matches("#resetPasswordForm, [data-form='reset-password']")) {
-      resetPassword(event);
-    } else if (form.matches(".comment-form")) {
-      createComment(event);
-    }
+  document.addEventListener('submit', e => {
+    if (e.target.id === 'loginForm') login(e);
+    else if (e.target.id === 'signupForm') signup(e);
+    else if (e.target.id === 'postForm') createPost(e);
+    else if (e.target.id === 'profileForm') saveProfile(e);
+    else if (e.target.matches('.commentform')) submitComment(e);
   });
 
-  document.addEventListener("click", async (event) => {
-    const button = event.target.closest("button, [data-action]");
+  document.addEventListener('click', e => {
+    const button = e.target.closest('button');
     if (!button) return;
 
-    if (button.matches("#logoutBtn, [data-action='logout']")) {
-      event.preventDefault();
-      await logOut();
+    if (button.dataset.tab) return showAuth(button.dataset.tab);
+    if (button.id === 'logout') return logout();
+    if (button.id === 'forgot') return reset();
+
+    if (button.id === 'theme') {
+      return theme(
+        document.body.dataset.theme === 'light' ? 'dark' : 'light'
+      );
+    }
+
+    if (button.id === 'accent') {
+      setView('settings');
       return;
     }
 
-    if (button.matches("#showSignup, [data-action='show-signup']")) {
-      toggle("#loginSection", false);
-      toggle("#signupSection", true);
-      return;
-    }
+    if (button.id === 'refresh') return loadFeed();
+    if (button.dataset.theme) return theme(button.dataset.theme);
+    if (button.dataset.color) return accent(button.dataset.color);
+    if (button.dataset.view) return setView(button.dataset.view);
 
-    if (button.matches("#showLogin, [data-action='show-login']")) {
-      toggle("#signupSection", false);
-      toggle("#loginSection", true);
-      return;
-    }
+    if (button.dataset.action === 'like')
+      return like(button.dataset.id, button);
 
-    const action = button.dataset.action;
-    const postId = button.dataset.id;
+    if (button.dataset.action === 'comments')
+      return comments(button.dataset.id, button.closest('.post'));
 
-    if (action === "like" && postId) {
-      await toggleLike(postId, button);
-    } else if (action === "comments" && postId) {
-      const article = button.closest(".talkatch-post");
-      const container = article?.querySelector(".post-comments");
+    if (button.dataset.action === 'follow')
+      return follow(button.dataset.user, button);
+  });
 
-      if (container && !container.hidden) {
-        container.hidden = true;
-      } else {
-        await loadComments(postId, article);
-      }
-    } else if (action === "follow" && button.dataset.user) {
-      await toggleFollow(button.dataset.user, button);
-    } else if (action === "refresh-feed") {
-      await loadFeed();
-    } else if (action === "refresh-notifications") {
-      await loadNotifications();
+  $('#avatarFile').addEventListener('change', uploadPhoto);
+
+  $('#search').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && state.user) {
+      setView('discover');
+      loadPeople(e.currentTarget.value.trim());
     }
   });
 
-  /* -------------------- PASSWORD RECOVERY -------------------- */
+  theme(localStorage.getItem('talkatch-theme') || 'dark');
+  accent(localStorage.getItem('talkatch-accent') || '#a78bfa');
+  window.lucide?.createIcons();
+
+  // This route is hidden from navigation, but is not an admin system.
+  if (location.pathname.replace(/\/+$/, '') === '/admin') {
+    document.body.innerHTML = `
+      <main style="max-width:620px;margin:12vh auto;padding:24px;font:15px system-ui">
+        <h1>TALKATCH Admin</h1>
+        <p>
+          Admin tools are not enabled yet. Configure a verified admin role
+          and enforce access with Supabase RLS or secure server-side functions
+          before adding admin actions.
+        </p>
+        <a href="/">Return to TALKATCH</a>
+      </main>
+    `;
+    return;
+  }
+
+  db.auth.getSession()
+    .then(({ data, error }) => {
+      if (error) {
+        console.error(error);
+        return showAuth();
+      }
+
+      return init(data.session);
+    })
+    .catch(e => {
+      console.error(e);
+      showAuth();
+    });
 
   db.auth.onAuthStateChange((event, session) => {
-    if (event === "PASSWORD_RECOVERY") {
-      showMessage("Enter your new password to finish recovery.");
-      toggle("#passwordUpdateForm", true);
+    if (event === 'SIGNED_OUT') {
+      state.user = null;
+      state.profile = null;
+      showAuth();
+    } else if (event === 'SIGNED_IN') {
+      state.user = session?.user || null;
     }
   });
-
-  document.addEventListener("submit", async (event) => {
-    const form = event.target;
-    if (!form.matches("#passwordUpdateForm")) return;
-
-    event.preventDefault();
-
-    const password = value(form, "password", "newPassword");
-
-    if (password.length < 8) {
-      showMessage("Password must be at least 8 characters.", "error");
-      return;
-    }
-
-    const { error } = await db.auth.updateUser({ password });
-
-    if (error) {
-      showMessage(friendlyError(error), "error");
-      return;
-    }
-
-    showMessage("Password updated. You can now log in.", "success");
-    await logOut();
-  });
-
-  /* -------------------- START -------------------- */
-
-  async function start() {
-    const { data, error } = await db.auth.getSession();
-
-    if (error) {
-      console.error("Session restoration failed:", error);
-      showMessage("Unable to restore your session. Please log in again.", "error");
-      return;
-    }
-
-    await initializeApp(data.session);
-
-    /*
-     * Listen for login/logout/refresh events.
-     * Avoid doing heavy async work directly inside the auth callback.
-     */
-    db.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT") {
-        state.user = null;
-        state.profile = null;
-        toggle("#authSection", true);
-        toggle("#appSection", false);
-      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
-        state.user = session?.user || null;
-      }
-    });
-  }
 
   window.TALKATCH = {
     db,
-    signUp,
-    logIn,
-    logOut,
-    resetPassword,
-    loadProfile,
-    saveProfile,
+    logout,
     loadFeed,
-    createPost,
     loadPeople,
-    loadNotifications
+    loadNotifications,
+    setView
   };
-
-  start().catch((error) => {
-    console.error("TALKATCH startup error:", error);
-    showMessage("TALKATCH could not start. Check the browser console.", "error");
-  });
 })();
