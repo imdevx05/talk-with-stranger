@@ -2,24 +2,841 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>TALK | STRANGER</title>
-
-    <link rel="stylesheet" href="css/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#090d18">
+  <title>TALKATCH — Meet. Share. Connect.</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090d18;
+      --panel: #111827;
+      --panel2: #172033;
+      --border: #273249;
+      --text: #f4f7ff;
+      --muted: #98a5bd;
+      --accent: #8b5cf6;
+      --accent2: #22d3ee;
+      --danger: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, system-ui, sans-serif;
+    }
+    button, input, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .hidden { display: none !important; }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 24px; font-weight: 800; letter-spacing: -1px;
+    }
+    .brand-icon {
+      width: 39px; height: 39px; display: grid; place-items: center;
+      border-radius: 14px; color: white;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+    }
+    .auth-screen {
+      min-height: 100vh; display: grid; place-items: center;
+      padding: 24px;
+      background: radial-gradient(ellipse at top, #1c2344 0%, var(--bg) 65%);
+    }
+    .auth-card {
+      width: 100%; max-width: 430px; padding: 32px;
+      border: 1px solid var(--border); border-radius: 24px;
+      background: rgba(17,24,39,.94);
+      box-shadow: 0 24px 100px #0005;
+    }
+    .auth-card .brand { justify-content: center; margin-bottom: 14px; }
+    .auth-card h1 { text-align: center; margin: 18px 0 8px; font-size: 28px; }
+    .auth-card > p { text-align: center; color: var(--muted); line-height: 1.6; }
+    .field { display: grid; gap: 8px; margin: 16px 0; }
+    .field label { color: #d9e1f2; font-size: 13px; font-weight: 600; }
+    .field input, .field textarea, .search-input, .composer textarea {
+      width: 100%; padding: 13px 14px; border-radius: 12px;
+      border: 1px solid var(--border); background: #0b1220;
+      color: var(--text); outline: none;
+    }
+    input:focus, textarea:focus { border-color: var(--accent); }
+    .btn {
+      border: 0; border-radius: 12px; padding: 12px 16px;
+      background: linear-gradient(110deg, var(--accent), #6366f1);
+      color: white; font-weight: 700;
+    }
+    .btn:disabled { opacity: .55; cursor: wait; }
+    .btn.secondary {
+      background: var(--panel2); border: 1px solid var(--border);
+    }
+    .btn.full { width: 100%; }
+    .text-btn {
+      background: transparent; border: 0; color: #c4b5fd;
+      padding: 6px; font-weight: 700;
+    }
+    .auth-switch { text-align: center; margin-top: 18px; color: var(--muted); font-size: 13px; }
+    #notice { min-height: 20px; font-size: 13px; color: var(--accent2); text-align: center; }
+    .layout {
+      max-width: 1250px; margin: auto; min-height: 100vh;
+      display: grid; grid-template-columns: 235px minmax(0, 660px) 275px;
+      gap: 24px; padding: 22px;
+    }
+    .sidebar { position: sticky; top: 22px; height: fit-content; }
+    .sidebar .brand { margin: 4px 0 32px; }
+    .nav { display: grid; gap: 8px; }
+    .nav button {
+      display: flex; align-items: center; gap: 12px; width: 100%;
+      padding: 13px 14px; border: 1px solid transparent;
+      border-radius: 13px; background: transparent; color: var(--muted);
+      text-align: left;
+    }
+    .nav button.active, .nav button:hover {
+      color: white; background: var(--panel2); border-color: var(--border);
+    }
+    .nav .nav-icon { width: 23px; text-align: center; font-size: 18px; }
+    .sidebar-bottom { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
+    .main { min-width: 0; }
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; margin-bottom: 22px;
+    }
+    .topbar h1 { font-size: 23px; margin: 0; }
+    .avatar {
+      width: 43px; height: 43px; flex: 0 0 auto; border-radius: 50%;
+      display: grid; place-items: center; object-fit: cover;
+      background: linear-gradient(135deg, #7c3aed, #0891b2);
+      color: white; font-weight: 800;
+    }
+    .avatar.sm { width: 36px; height: 36px; font-size: 12px; }
+    .avatar.lg { width: 78px; height: 78px; font-size: 24px; }
+    .panel {
+      border: 1px solid var(--border); background: var(--panel);
+      border-radius: 18px; padding: 18px; margin-bottom: 16px;
+    }
+    .panel h2 { font-size: 16px; margin: 0 0 14px; }
+    .composer-head { display: flex; gap: 12px; align-items: flex-start; }
+    .composer { flex: 1; min-width: 0; }
+    .composer textarea { min-height: 88px; resize: vertical; }
+    .composer-actions {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 12px; margin-top: 12px;
+    }
+    .post { padding: 18px; }
+    .post-head { display: flex; gap: 11px; align-items: center; }
+    .post-user { flex: 1; min-width: 0; }
+    .post-user strong { display: block; font-size: 14px; }
+    .post-user span { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .post-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; margin: 17px 0; }
+    .post-image {
+      display: block; width: 100%; max-height: 440px; object-fit: cover;
+      border-radius: 13px; margin: 12px 0;
+    }
+    .post-actions {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      border-top: 1px solid var(--border); padding-top: 12px;
+    }
+    .action {
+      border: 1px solid transparent; border-radius: 10px; padding: 8px 10px;
+      background: transparent; color: var(--muted);
+    }
+    .action:hover { background: var(--panel2); color: white; }
+    .action.liked { color: #fb7185; }
+    .comment-list { margin-top: 12px; display: grid; gap: 9px; }
+    .comment {
+      background: #0b1220; border-radius: 10px; padding: 10px 12px;
+      font-size: 13px; line-height: 1.5;
+    }
+    .comment strong { color: #c4b5fd; margin-right: 6px; }
+    .comment-form { display: flex; gap: 8px; margin-top: 10px; }
+    .comment-form input { flex: 1; min-width: 0; }
+    .comment-form input, .search-input {
+      padding: 10px 12px; border-radius: 10px;
+      border: 1px solid var(--border); background: #0b1220; color: white;
+    }
+    .people-list { display: grid; gap: 14px; }
+    .person { display: flex; gap: 10px; align-items: center; min-width: 0; }
+    .person-info { flex: 1; min-width: 0; }
+    .person-info strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
+    .person-info span { color: var(--muted); font-size: 12px; }
+    .right-column { min-width: 0; }
+    .profile-cover {
+      height: 95px; border-radius: 14px;
+      background: linear-gradient(125deg, #7c3aed, #0891b2, #1e293b);
+      margin-bottom: -36px;
+    }
+    .profile-details { padding: 0 4px; }
+    .profile-details .avatar { border: 4px solid var(--panel); }
+    .profile-details h2 { margin: 10px 0 4px; font-size: 17px; }
+    .profile-details p { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .empty { text-align: center; padding: 35px 16px; color: var(--muted); }
+    .empty strong { display: block; color: white; margin-bottom: 8px; }
+    .status { font-size: 12px; color: var(--accent2); min-height: 16px; margin-top: 8px; }
+    .mobile-brand { display: none; }
+    @media (max-width: 1050px) {
+      .layout { grid-template-columns: 205px minmax(0, 660px); max-width: 900px; }
+      .right-column { display: none; }
+    }
+    @media (max-width: 650px) {
+      .layout { display: block; padding: 14px 12px 85px; }
+      .sidebar { position: fixed; z-index: 10; bottom: 0; left: 0; right: 0;
+        top: auto; height: auto; padding: 8px 10px;
+        border-top: 1px solid var(--border); background: #0b1020; }
+      .sidebar .brand, .sidebar-bottom { display: none; }
+      .nav { display: flex; justify-content: space-around; gap: 3px; }
+      .nav button { flex: 1; flex-direction: column; justify-content: center;
+        gap: 4px; padding: 8px 3px; font-size: 10px; }
+      .nav .nav-icon { font-size: 18px; }
+      .mobile-brand { display: flex; align-items: center; gap: 10px; }
+      .topbar h1 { font-size: 20px; }
+      .panel { padding: 14px; }
+      .auth-card { padding: 24px 19px; }
+    }
+  </style>
 </head>
-
 <body>
-    <main class="container">
-        <h1>WELCOME TO TALKATCH</h1>
-        <h2>FIND A STRANGER NOW</h2>
+  <section id="authScreen" class="auth-screen">
+    <div class="auth-card">
+      <div class="brand">
+        <span class="brand-icon">✦</span><span>TALKATCH</span>
+      </div>
+      <h1 id="authTitle">Welcome back</h1>
+      <p id="authSubtitle">Your people. Your conversations. Your space.</p>
+      <form id="authForm">
+        <div id="nameField" class="field hidden">
+          <label for="displayName">Display name</label>
+          <input id="displayName" maxlength="40" autocomplete="name" placeholder="What should we call you?">
+        </div>
+        <div class="field">
+          <label for="email">Email address</label>
+          <input id="email" type="email" required autocomplete="email" placeholder="you@example.com">
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" type="password" required minlength="6" autocomplete="current-password" placeholder="At least 6 characters">
+        </div>
+        <button id="authSubmit" class="btn full" type="submit">Sign in</button>
+      </form>
+      <p id="notice" role="status"></p>
+      <div class="auth-switch">
+        <span id="switchText">New to TALKATCH?</span>
+        <button id="switchAuth" type="button" class="text-btn">Create account</button>
+      </div>
+      <p class="small">Be kind. Respect privacy. Never share your password.</p>
+    </div>
+  </section>
 
-        <p>Meet new people, make friends, and start a conversation.</p>
+  <div id="app" class="layout hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-icon">✦</span><span>TALKATCH</span></div>
+      <nav class="nav">
+        <button class="active" data-view="home"><span class="nav-icon">⌂</span>Home</button>
+        <button data-view="discover"><span class="nav-icon">⌕</span>Discover</button>
+        <button data-view="profile"><span class="nav-icon">◉</span>My profile</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="person">
+          <div id="sideAvatar" class="avatar sm">T</div>
+          <div class="person-info"><strong id="sideName">Your account</strong><span>Signed in</span></div>
+        </div>
+        <button id="logoutBtn" class="btn secondary full" style="margin-top:16px">Sign out</button>
+      </div>
+    </aside>
 
-        <button id="startChat">Start Chatting</button>
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="mobile-brand brand"><span class="brand-icon">✦</span><span>TALKATCH</span></div>
+          <h1 id="pageTitle">Your feed</h1>
+        </div>
+        <div id="topAvatar" class="avatar">T</div>
+      </header>
+
+      <section id="homeView">
+        <div class="panel">
+          <div class="composer-head">
+            <div id="composerAvatar" class="avatar">T</div>
+            <div class="composer">
+              <form id="postForm">
+                <textarea id="postText" maxlength="2000" placeholder="What's on your mind? Share something good..." required></textarea>
+                <div class="composer-actions">
+                  <span class="muted small">✦ Share with the community</span>
+                  <button class="btn" type="submit">Publish post</button>
+                </div>
+              </form>
+              <div id="postStatus" class="status" role="status"></div>
+            </div>
+          </div>
+        </div>
+        <div id="feed"></div>
+      </section>
+
+      <section id="discoverView" class="hidden">
+        <div class="panel">
+          <h2>Find your people</h2>
+          <input id="peopleSearch" class="search-input" placeholder="Search usernames or display names..." style="width:100%">
+          <p class="muted small">Discover community profiles.</p>
+        </div>
+        <div id="peopleResults" class="panel people-list"></div>
+      </section>
+
+      <section id="profileView" class="hidden">
+        <div class="panel">
+          <h2>Edit your profile</h2>
+          <form id="profileForm">
+            <div class="field">
+              <label for="profileDisplayName">Display name</label>
+              <input id="profileDisplayName" maxlength="40" required>
+            </div>
+            <div class="field">
+              <label for="profileBio">Bio</label>
+              <textarea id="profileBio" maxlength="250" rows="3" placeholder="A little about you..."></textarea>
+            </div>
+            <div class="field">
+              <label for="profileAvatar">Avatar image URL (optional)</label>
+              <input id="profileAvatar" type="url" placeholder="https://example.com/photo.jpg">
+            </div>
+            <button class="btn" type="submit">Save profile</button>
+            <div id="profileStatus" class="status" role="status"></div>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>Your posts</h2>
+          <div id="myPosts"></div>
+        </div>
+      </section>
     </main>
 
-    <script src="js/script.js"></script>
+    <aside class="right-column">
+      <div class="panel">
+        <div class="profile-cover"></div>
+        <div class="profile-details">
+          <div id="rightAvatar" class="avatar lg">T</div>
+          <h2 id="rightName">Your profile</h2>
+          <div id="rightUsername" class="muted small">@username</div>
+          <p id="rightBio">Welcome to your TALKATCH space.</p>
+          <button class="btn secondary full" data-go-profile>Edit profile</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>People to discover</h2>
+        <div id="suggestedPeople" class="people-list"></div>
+        <button class="text-btn" data-go-discover>Explore everyone →</button>
+      </div>
+      <div class="muted small" style="padding:8px">
+        TALKATCH · Connect respectfully<br>
+        Protect your personal information.
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    // -------------------------------------------------------
+    // 1. CONFIGURATION: replace both values with your project
+    // -------------------------------------------------------
+    const SUPABASE_URL = "YOUR_SUPABASE_URL";
+    const SUPABASE_PUBLISHABLE_KEY = "YOUR_SUPABASE_PUBLISHABLE_KEY";
+
+    const configured =
+      SUPABASE_URL.startsWith("https://") &&
+      !SUPABASE_URL.includes("YOUR_SUPABASE") &&
+      SUPABASE_PUBLISHABLE_KEY.length > 20 &&
+      !SUPABASE_PUBLISHABLE_KEY.includes("YOUR_SUPABASE");
+
+    const supabase = configured
+      ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+      : null;
+
+    const $ = (id) => document.getElementById(id);
+    let currentUser = null;
+    let myProfile = null;
+    let authMode = "login";
+    let activeView = "home";
+    let feedPosts = [];
+    let profilesCache = [];
+
+    function escapeHTML(value = "") {
+      return String(value).replace(/[&<>"']/g, ch => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;",
+        '"': "&quot;", "'": "&#39;"
+      }[ch]));
+    }
+
+    function initials(name = "TALKATCH") {
+      return name.trim().split(/\s+/).slice(0, 2)
+        .map(part => part[0] || "").join("").toUpperCase() || "T";
+    }
+
+    function avatarHTML(profile, size = "") {
+      const name = profile?.display_name || profile?.username || "User";
+      const url = profile?.avatar_url;
+      if (url && /^https:\/\//i.test(url)) {
+        return `<img class="avatar ${size}" src="${escapeHTML(url)}" alt=""
+          referrerpolicy="no-referrer"
+          onerror="this.outerHTML='<div class=&quot;avatar ${size}&quot;>${escapeHTML(initials(name))}</div>'">`;
+      }
+      return `<div class="avatar ${size}">${escapeHTML(initials(name))}</div>`;
+    }
+
+    function setNotice(message, isError = false) {
+      $("notice").textContent = message;
+      $("notice").style.color = isError ? "#fb7185" : "#22d3ee";
+    }
+
+    function setStatus(id, message, isError = false) {
+      $(id).textContent = message;
+      $(id).style.color = isError ? "#fb7185" : "#22d3ee";
+    }
+
+    function showAuth() {
+      $("authScreen").classList.remove("hidden");
+      $("app").classList.add("hidden");
+    }
+
+    function showApp() {
+      $("authScreen").classList.add("hidden");
+      $("app").classList.remove("hidden");
+    }
+
+    function updateAuthUI() {
+      const login = authMode === "login";
+      $("authTitle").textContent = login ? "Welcome back" : "Join the community";
+      $("authSubtitle").textContent = login
+        ? "Your people. Your conversations. Your space."
+        : "Create an account and find your people.";
+      $("authSubmit").textContent = login ? "Sign in" : "Create account";
+      $("switchText").textContent = login ? "New to TALKATCH?" : "Already have an account?";
+      $("switchAuth").textContent = login ? "Create account" : "Sign in";
+      $("nameField").classList.toggle("hidden", login);
+      $("password").autocomplete = login ? "current-password" : "new-password";
+      setNotice("");
+    }
+
+    $("switchAuth").addEventListener("click", () => {
+      authMode = authMode === "login" ? "signup" : "login";
+      updateAuthUI();
+    });
+
+    $("authForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!supabase) {
+        setNotice("Add your Supabase URL and publishable key in the JavaScript first.", true);
+        return;
+      }
+
+      const email = $("email").value.trim();
+      const password = $("password").value;
+      const displayName = $("displayName").value.trim() || "New user";
+      $("authSubmit").disabled = true;
+      setNotice(authMode === "login" ? "Signing in..." : "Creating your account...");
+
+      try {
+        let result;
+        if (authMode === "signup") {
+          const username = email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20) || "user";
+          result = await supabase.auth.signUp({
+            email, password,
+            options: { data: { username, display_name: displayName } }
+          });
+        } else {
+          result = await supabase.auth.signInWithPassword({ email, password });
+        }
+
+        if (result.error) throw result.error;
+
+        if (authMode === "signup" && !result.data.session) {
+          setNotice("Account created! Check your email to confirm, then sign in.");
+        } else if (result.data.user) {
+          currentUser = result.data.user;
+          await enterApp();
+        }
+      } catch (error) {
+        setNotice(error.message || "Authentication failed.", true);
+      } finally {
+        $("authSubmit").disabled = false;
+      }
+    });
+
+    $("logoutBtn").addEventListener("click", async () => {
+      if (!supabase) return;
+      const { error } = await supabase.auth.signOut();
+      if (error) return alert(error.message);
+      currentUser = null;
+      myProfile = null;
+      showAuth();
+    });
+
+    async function loadMyProfile() {
+      const { data, error } = await supabase
+        .from("profiles").select("*").eq("id", currentUser.id).single();
+      if (error) throw error;
+      myProfile = data;
+    }
+
+    function paintMyProfile() {
+      const name = myProfile?.display_name || "TALKATCH user";
+      const username = myProfile?.username || "user";
+      $("sideName").textContent = name;
+      $("sideAvatar").outerHTML = `<div id="sideAvatar" class="avatar sm">${avatarHTML(myProfile).includes("<img") ? "" : escapeHTML(initials(name))}</div>`;
+      $("topAvatar").outerHTML = avatarHTML(myProfile);
+      $("composerAvatar").outerHTML = avatarHTML(myProfile);
+      $("rightAvatar").outerHTML = avatarHTML(myProfile, "lg");
+      $("rightName").textContent = name;
+      $("rightUsername").textContent = "@" + username;
+      $("rightBio").textContent = myProfile?.bio || "Welcome to your TALKATCH space.";
+      $("profileDisplayName").value = myProfile?.display_name || "";
+      $("profileBio").value = myProfile?.bio || "";
+      $("profileAvatar").value = myProfile?.avatar_url || "";
+    }
+
+    async function enterApp() {
+      showApp();
+      try {
+        await loadMyProfile();
+        paintMyProfile();
+        await loadFeed();
+        await loadPeople("");
+      } catch (error) {
+        console.error(error);
+        alert("Could not load your profile. If you just ran the SQL, try signing out and signing up again. Details: " + error.message);
+      }
+    }
+
+    function goView(view) {
+      activeView = view;
+      $("homeView").classList.toggle("hidden", view !== "home");
+      $("discoverView").classList.toggle("hidden", view !== "discover");
+      $("profileView").classList.toggle("hidden", view !== "profile");
+      $("pageTitle").textContent = ({
+        home: "Your feed", discover: "Discover people", profile: "Your profile"
+      })[view] || "TALKATCH";
+      document.querySelectorAll("[data-view]").forEach(button => {
+        button.classList.toggle("active", button.dataset.view === view);
+      });
+      if (view === "profile") loadMyPosts();
+      if (view === "discover") loadPeople($("peopleSearch").value);
+    }
+
+    document.querySelectorAll("[data-view]").forEach(button => {
+      button.addEventListener("click", () => goView(button.dataset.view));
+    });
+    document.querySelectorAll("[data-go-profile]").forEach(button => {
+      button.addEventListener("click", () => goView("profile"));
+    });
+    document.querySelectorAll("[data-go-discover]").forEach(button => {
+      button.addEventListener("click", () => goView("discover"));
+    });
+
+    function timeAgo(dateString) {
+      const seconds = Math.max(0, Math.floor((Date.now() - new Date(dateString).getTime()) / 1000));
+      if (seconds < 60) return "just now";
+      if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+      if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
+      if (seconds < 604800) return Math.floor(seconds / 86400) + "d ago";
+      return new Date(dateString).toLocaleDateString();
+    }
+
+    async function loadFeed() {
+      $("feed").innerHTML = '<div class="panel empty">Loading your feed...</div>';
+      const { data, error } = await supabase
+        .from("posts")
+        .select("id,user_id,content,image_url,created_at")
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (error) {
+        $("feed").innerHTML = `<div class="panel empty">${escapeHTML(error.message)}</div>`;
+        return;
+      }
+
+      const posts = data || [];
+      const userIds = [...new Set(posts.map(post => post.user_id))];
+      let profiles = [];
+      let likes = [];
+      let comments = [];
+
+      if (userIds.length) {
+        const [profilesResult, likesResult, commentsResult] = await Promise.all([
+          supabase.from("profiles").select("id,username,display_name,avatar_url").in("id", userIds),
+          supabase.from("likes").select("post_id,user_id").in("post_id", posts.map(post => post.id)),
+          supabase.from("comments").select("id,post_id,user_id,content,created_at").in("post_id", posts.map(post => post.id)).order("created_at")
+        ]);
+        profiles = profilesResult.data || [];
+        likes = likesResult.data || [];
+        comments = commentsResult.data || [];
+      }
+
+      const profileById = Object.fromEntries(profiles.map(profile => [profile.id, profile]));
+      const commentUserIds = [...new Set(comments.map(comment => comment.user_id))];
+      let commentProfiles = [];
+      if (commentUserIds.length) {
+        const result = await supabase.from("profiles")
+          .select("id,username,display_name").in("id", commentUserIds);
+        commentProfiles = result.data || [];
+      }
+      const commentProfileById = Object.fromEntries(commentProfiles.map(profile => [profile.id, profile]));
+
+      feedPosts = posts.map(post => ({
+        ...post,
+        profile: profileById[post.user_id],
+        likes: likes.filter(like => like.post_id === post.id),
+        comments: comments.filter(comment => comment.post_id === post.id).map(comment => ({
+          ...comment, profile: commentProfileById[comment.user_id]
+        }))
+      }));
+
+      renderFeed($("feed"), feedPosts);
+    }
+
+    function renderFeed(container, posts) {
+      if (!posts.length) {
+        container.innerHTML = `<div class="panel empty"><strong>No posts yet</strong>Be the first to share something with the community.</div>`;
+        return;
+      }
+
+      container.innerHTML = posts.map(post => {
+        const profile = post.profile || { display_name: "TALKATCH user", username: "user" };
+        const liked = post.likes?.some(like => like.user_id === currentUser.id);
+        const image = post.image_url && /^https:\/\//i.test(post.image_url)
+          ? `<img class="post-image" src="${escapeHTML(post.image_url)}" alt="Post image" loading="lazy">`
+          : "";
+        const commentsHTML = (post.comments || []).map(comment => `
+          <div class="comment"><strong>${escapeHTML(comment.profile?.display_name || comment.profile?.username || "User")}</strong>${escapeHTML(comment.content)}</div>
+        `).join("");
+
+        return `
+          <article class="panel post" data-post="${post.id}">
+            <div class="post-head">
+              ${avatarHTML(profile, "sm")}
+              <div class="post-user">
+                <strong>${escapeHTML(profile.display_name || profile.username || "User")}</strong>
+                <span>@${escapeHTML(profile.username || "user")} · ${timeAgo(post.created_at)}</span>
+              </div>
+              ${post.user_id === currentUser.id ? `<button class="action delete-post" data-id="${post.id}" title="Delete post">⋯</button>` : ""}
+            </div>
+            ${post.content ? `<div class="post-content">${escapeHTML(post.content)}</div>` : ""}
+            ${image}
+            <div class="post-actions">
+              <button class="action ${liked ? "liked" : ""}" data-like="${post.id}">${liked ? "♥ Liked" : "♡ Like"} · ${post.likes?.length || 0}</button>
+              <button class="action" data-focus-comment="${post.id}">▢ Comment · ${post.comments?.length || 0}</button>
+            </div>
+            <div class="comment-list">${commentsHTML}</div>
+            <form class="comment-form" data-comment-form="${post.id}">
+              <input name="comment" maxlength="1000" required placeholder="Write a kind comment...">
+              <button class="btn" type="submit">Send</button>
+            </form>
+          </article>`;
+      }).join("");
+    }
+
+    $("postForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const content = $("postText").value.trim();
+      if (!content) return;
+      const button = event.submitter;
+      button.disabled = true;
+      setStatus("postStatus", "Publishing...");
+      try {
+        const { error } = await supabase.from("posts").insert({
+          user_id: currentUser.id, content
+        });
+        if (error) throw error;
+        $("postText").value = "";
+        setStatus("postStatus", "Post published!");
+        await loadFeed();
+      } catch (error) {
+        setStatus("postStatus", error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    $("feed").addEventListener("click", async (event) => {
+      const likeButton = event.target.closest("[data-like]");
+      const deleteButton = event.target.closest(".delete-post");
+      const focusButton = event.target.closest("[data-focus-comment]");
+
+      if (focusButton) {
+        const form = document.querySelector(`[data-comment-form="${focusButton.dataset.focusComment}"]`);
+        form?.querySelector("input")?.focus();
+      }
+
+      if (likeButton) {
+        const postId = likeButton.dataset.like;
+        const post = feedPosts.find(item => item.id === postId);
+        if (!post) return;
+        likeButton.disabled = true;
+        try {
+          const alreadyLiked = post.likes.some(like => like.user_id === currentUser.id);
+          const result = alreadyLiked
+            ? await supabase.from("likes").delete().eq("post_id", postId).eq("user_id", currentUser.id)
+            : await supabase.from("likes").insert({ post_id: postId, user_id: currentUser.id });
+          if (result.error) throw result.error;
+          await loadFeed();
+        } catch (error) {
+          alert("Could not update like: " + error.message);
+        } finally {
+          likeButton.disabled = false;
+        }
+      }
+
+      if (deleteButton) {
+        if (!confirm("Delete this post? This cannot be undone.")) return;
+        const { error } = await supabase.from("posts")
+          .delete().eq("id", deleteButton.dataset.id).eq("user_id", currentUser.id);
+        if (error) alert(error.message);
+        else await loadFeed();
+      }
+    });
+
+    $("feed").addEventListener("submit", async (event) => {
+      const form = event.target.closest("[data-comment-form]");
+      if (!form) return;
+      event.preventDefault();
+      const postId = form.dataset.commentForm;
+      const input = form.elements.comment;
+      const content = input.value.trim();
+      if (!content) return;
+      const button = form.querySelector("button");
+      button.disabled = true;
+      try {
+        const { error } = await supabase.from("comments").insert({
+          post_id: postId, user_id: currentUser.id, content
+        });
+        if (error) throw error;
+        await loadFeed();
+      } catch (error) {
+        alert("Could not add comment: " + error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    $("profileForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const display_name = $("profileDisplayName").value.trim();
+      const bio = $("profileBio").value.trim();
+      const avatar_url = $("profileAvatar").value.trim() || null;
+
+      if (avatar_url && !/^https:\/\//i.test(avatar_url)) {
+        setStatus("profileStatus", "Avatar URL must start with https://", true);
+        return;
+      }
+
+      setStatus("profileStatus", "Saving profile...");
+      const { error } = await supabase.from("profiles")
+        .update({ display_name, bio, avatar_url })
+        .eq("id", currentUser.id);
+
+      if (error) {
+        setStatus("profileStatus", error.message, true);
+        return;
+      }
+
+      await loadMyProfile();
+      paintMyProfile();
+      setStatus("profileStatus", "Profile saved!");
+      await loadPeople("");
+    });
+
+    async function loadMyPosts() {
+      $("myPosts").innerHTML = '<p class="muted">Loading...</p>';
+      const { data, error } = await supabase.from("posts")
+        .select("id,user_id,content,image_url,created_at")
+        .eq("user_id", currentUser.id).order("created_at", { ascending: false });
+
+      if (error) {
+        $("myPosts").textContent = error.message;
+        return;
+      }
+      renderFeed($("myPosts"), (data || []).map(post => ({
+        ...post, profile: myProfile, likes: [], comments: []
+      })));
+    }
+
+    $("peopleSearch").addEventListener("input", () => {
+      clearTimeout(window.peopleSearchDelay);
+      window.peopleSearchDelay = setTimeout(() => loadPeople($("peopleSearch").value), 250);
+    });
+
+    async function loadPeople(query) {
+      if (!currentUser || !supabase) return;
+      const { data, error } = await supabase.from("profiles")
+        .select("id,username,display_name,bio,avatar_url")
+        .neq("id", currentUser.id)
+        .order("created_at", { ascending: false })
+        .limit(100);
+
+      if (error) {
+        $("peopleResults").textContent = error.message;
+        return;
+      }
+
+      profilesCache = data || [];
+      const term = query.trim().toLowerCase();
+      const matches = profilesCache.filter(person =>
+        !term ||
+        (person.username || "").toLowerCase().includes(term) ||
+        (person.display_name || "").toLowerCase().includes(term)
+      );
+
+      const html = matches.length ? matches.map(person => `
+        <div class="person">
+          ${avatarHTML(person, "sm")}
+          <div class="person-info">
+            <strong>${escapeHTML(person.display_name || person.username)}</strong>
+            <span>@${escapeHTML(person.username || "user")}</span>
+          </div>
+        </div>
+      `).join("") : '<div class="empty">No people found yet.</div>';
+
+      $("peopleResults").innerHTML = html;
+      $("suggestedPeople").innerHTML = matches.slice(0, 4).map(person => `
+        <div class="person">
+          ${avatarHTML(person, "sm")}
+          <div class="person-info">
+            <strong>${escapeHTML(person.display_name || person.username)}</strong>
+            <span>@${escapeHTML(person.username || "user")}</span>
+          </div>
+        </div>
+      `).join("") || '<p class="muted small">New people will appear here.</p>';
+    }
+
+    async function boot() {
+      if (!supabase) {
+        showAuth();
+        setNotice("Setup needed: add your Supabase URL and publishable key in the code.", true);
+        return;
+      }
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        setNotice(error.message, true);
+        return;
+      }
+      if (data.session?.user) {
+        currentUser = data.session.user;
+        await enterApp();
+      } else {
+        showAuth();
+      }
+
+      supabase.auth.onAuthStateChange((_event, session) => {
+        if (session?.user && !currentUser) {
+          currentUser = session.user;
+          setTimeout(() => enterApp(), 0);
+        } else if (!session) {
+          currentUser = null;
+          showAuth();
+        }
+      });
+    }
+
+    updateAuthUI();
+    boot();
+  </script>
 </body>
 </html>
