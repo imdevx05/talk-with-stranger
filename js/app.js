@@ -1,855 +1,696 @@
+
 (() => {
-  'use strict';
+  "use strict";
 
-  const cfg = window.TALKATCH_CONFIG;
+  const config = window.TALKATCH_CONFIG || {};
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-  if (!cfg?.supabaseUrl ||
-      !cfg?.supabasePublishableKey ||
-      !window.supabase?.createClient) {
-    console.error('TALKATCH: Check config.js and Supabase JS.');
-    return;
+  let supabase;
+  let currentUser = null;
+  let currentProfile = null;
+  let toastTimeout;
+
+  function toast(message) {
+    const el = $("#toast");
+    el.textContent = message;
+    el.classList.remove("hidden");
+    clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => el.classList.add("hidden"), 3500);
   }
 
-  const db = window.supabase.createClient(
-    cfg.supabaseUrl,
-    cfg.supabasePublishableKey,
-    {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true
-      }
+  function setAuthMessage(message, isError = false) {
+    const el = $("#auth-message");
+    el.textContent = message;
+    el.classList.remove("hidden", "error");
+    if (isError) el.classList.add("error");
+  }
+
+  function clearAuthMessage() {
+    $("#auth-message").classList.add("hidden");
+  }
+
+  function setBusy(form, busy) {
+    const button = $('button[type="submit"]', form);
+    if (!button) return;
+    button.disabled = busy;
+    if (busy) {
+      button.dataset.originalText = button.textContent;
+      button.textContent = "Please wait…";
+    } else if (button.dataset.originalText) {
+      button.textContent = button.dataset.originalText;
+      delete button.dataset.originalText;
+      window.lucide?.createIcons();
     }
-  );
-
-  const $ = (s, r = document) => r.querySelector(s);
-  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-
-  const state = {
-    user: null,
-    profile: null,
-    view: 'feed'
-  };
-
-  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  })[c]);
-
-  const initials = s => (s || 'T').trim().slice(0, 1).toUpperCase();
-
-  const val = (form, name) =>
-    String(new FormData(form).get(name) || '').trim();
-
-  function toast(message, error = false) {
-    const t = $('#toast');
-    t.textContent = message;
-    t.classList.toggle('error', error);
-    t.style.display = 'block';
-
-    clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => {
-      t.style.display = 'none';
-    }, 5000);
   }
 
-  function errorText(e) {
-    const m = e?.message || 'Something went wrong.';
-
-    if (/invalid login credentials/i.test(m))
-      return 'Incorrect email or password.';
-
-    if (/email not confirmed/i.test(m))
-      return 'Confirm your email before logging in.';
-
-    if (/already registered/i.test(m))
-      return 'That email is already registered. Try logging in.';
-
-    if (/rate limit/i.test(m))
-      return 'Too many attempts. Please wait and try again.';
-
-    return m;
+  function escapeHTML(value) {
+    return String(value ?? "").replace(/[&<>"']/g, ch => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[ch]);
   }
 
-  function showAuth(tab = 'login') {
-    $('#auth').hidden = false;
-    $('#app').hidden = true;
-    $('#mobile').hidden = true;
+  function initials(name) {
+    return String(name || "User").trim().split(/\s+/).slice(0, 2)
+      .map(part => part[0] || "").join("").toUpperCase() || "U";
+  }
 
-    $$('[data-tab]').forEach(b => {
-      b.classList.toggle('active', b.dataset.tab === tab);
+  function avatarURL(profile) {
+    return profile?.avatar_url ||
+      `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(profile?.display_name || profile?.username || "User")}`;
+  }
+
+  function formatDate(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  }
+
+  function showError(error, prefix = "Something went wrong") {
+    console.error(prefix, error);
+    const message = error?.message || String(error || "Unknown error");
+    toast(`${prefix}: ${message}`);
+  }
+
+  function setTheme(mode) {
+    const theme = mode === "light" ? "light" : "dark";
+    document.body.dataset.theme = theme;
+    try { localStorage.setItem("talkatch-theme", theme); } catch {}
+    const button = $("#theme");
+    if (button) {
+      button.setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+      button.title = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+    }
+    window.lucide?.createIcons();
+  }
+
+  function switchAuth(tab) {
+    const signup = tab === "signup";
+    $("#loginForm").classList.toggle("hidden", signup);
+    $("#signupForm").classList.toggle("hidden", !signup);
+    $$("[data-auth-tab]").forEach(button => {
+      button.classList.toggle("active", button.dataset.authTab === tab);
     });
-
-    $('#loginForm').hidden = tab !== 'login';
-    $('#signupForm').hidden = tab !== 'signup';
+    clearAuthMessage();
   }
 
-  function avatar(img, fallback, url, name) {
-    img.hidden = !url;
-    fallback.hidden = !!url;
-    fallback.textContent = initials(name);
-
-    if (url) img.src = url;
-
-    img.onerror = () => {
-      img.hidden = true;
-      fallback.hidden = false;
-    };
+  function showApp(loggedIn) {
+    $("#auth-view").classList.toggle("hidden", loggedIn);
+    $("#app-view").classList.toggle("hidden", !loggedIn);
+    $("#logout-btn").classList.toggle("hidden", !loggedIn);
+    if (!loggedIn) $("#user-label").textContent = "Welcome";
   }
 
-  function theme(value) {
-    document.body.dataset.theme = value;
-    localStorage.setItem('talkatch-theme', value);
-  }
-
-  function accent(color) {
-    document.documentElement.style.setProperty('--accent', color);
-    localStorage.setItem('talkatch-accent', color);
-  }
-
-  async function ensureProfile(user, username = '') {
-    const existing = await db
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
+  async function getOrCreateProfile(user) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, username, display_name, bio, avatar_url")
+      .eq("id", user.id)
       .maybeSingle();
 
-    if (existing.error) throw existing.error;
-    if (existing.data) return existing.data;
+    if (error) throw error;
+    if (data) return data;
 
-    const u = username ||
-      user.user_metadata?.username ||
-      user.email.split('@')[0];
+    const metadata = user.user_metadata || {};
+    const base = String(metadata.username || user.email?.split("@")[0] || "member")
+      .toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 18) || "member";
+    const profile = {
+      id: user.id,
+      username: `${base}_${user.id.replace(/-/g, "").slice(0, 5)}`,
+      display_name: metadata.display_name || base,
+      bio: "",
+      avatar_url: null
+    };
 
-    const result = await db
-      .from('profiles')
-      .insert({
-        id: user.id,
-        username: u,
-        display_name: user.user_metadata?.display_name || u,
-        bio: '',
-        avatar_url: null
-      })
-      .select()
-      .single();
-
-    if (result.error) {
-      const retry = await db
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .maybeSingle();
-
-      if (retry.data) return retry.data;
-      throw result.error;
-    }
-
+    const result = await supabase.from("profiles").insert(profile)
+      .select("id, username, display_name, bio, avatar_url").single();
+    if (result.error) throw result.error;
     return result.data;
   }
 
-  async function loadProfile() {
-    const result = await db
-      .from('profiles')
-      .select('*')
-      .eq('id', state.user.id)
-      .maybeSingle();
-
-    if (result.error) throw result.error;
-
-    state.profile = result.data ||
-      await ensureProfile(state.user);
-
-    const p = state.profile;
-    const name = p.display_name || p.username || state.user.email;
-
-    $('#sideName').textContent = name;
-    $('#sideHandle').textContent = '@' + (p.username || 'user');
-
-    avatar(
-      $('#sidePhoto'),
-      $('#sideInitial'),
-      p.avatar_url,
-      name
-    );
-
-    $('#composeInitial').textContent = initials(name);
-
-    $('#profileForm').elements.username.value = p.username || '';
-    $('#profileForm').elements.display_name.value = p.display_name || '';
-    $('#profileForm').elements.bio.value = p.bio || '';
-
-    avatar(
-      $('#profilePhoto'),
-      $('#profileInitial'),
-      p.avatar_url,
-      name
-    );
+  async function refreshProfile() {
+    if (!currentUser) return;
+    currentProfile = await getOrCreateProfile(currentUser);
+    renderProfileSummary();
+    fillProfileForm();
   }
 
-  function setView(name) {
-    state.view = name;
-
-    $$('.view').forEach(view => {
-      view.hidden = view.id !== name + 'View';
-    });
-
-    $$('[data-view]').forEach(button => {
-      button.classList.toggle(
-        'selected',
-        button.dataset.view === name
-      );
-    });
-
-    if (name === 'feed') loadFeed();
-    if (name === 'discover') loadPeople();
-    if (name === 'notifications') loadNotifications();
-
-    if (name === 'profile') {
-      loadProfile().catch(e => toast(errorText(e), true));
-    }
+  function renderProfileSummary() {
+    if (!currentProfile) return;
+    const name = currentProfile.display_name || currentProfile.username || "Member";
+    $("#side-name").textContent = name;
+    $("#side-username").textContent = `@${currentProfile.username || "member"}`;
+    $("#side-avatar").src = avatarURL(currentProfile);
+    $("#composer-avatar").src = avatarURL(currentProfile);
+    $("#profile-avatar-preview").src = avatarURL(currentProfile);
+    $("#user-label").textContent = name;
   }
 
-  async function init(session) {
-    state.user = session?.user || null;
+  function fillProfileForm() {
+    if (!currentProfile) return;
+    $("#profile-display-name").value = currentProfile.display_name || "";
+    $("#profile-username").value = currentProfile.username || "";
+    $("#profile-bio").value = currentProfile.bio || "";
+  }
 
-    if (!state.user) {
-      showAuth();
-      return;
-    }
-
-    $('#auth').hidden = true;
-    $('#app').hidden = false;
-    $('#mobile').hidden = false;
-
+  async function login(form) {
+    clearAuthMessage();
+    setBusy(form, true);
     try {
-      await loadProfile();
-      setView(state.view);
-    } catch (e) {
-      console.error(e);
-      toast(
-        'Signed in, but profile loading failed: ' + errorText(e),
-        true
-      );
+      const fd = new FormData(form);
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: String(fd.get("email") || "").trim(),
+        password: String(fd.get("password") || "")
+      });
+      if (error) throw error;
+      if (!data.user) throw new Error("Login did not return a user.");
+      await enterApp(data.user);
+    } catch (error) {
+      setAuthMessage(error.message || "Unable to log in.", true);
+    } finally {
+      setBusy(form, false);
     }
   }
 
-  async function signup(e) {
-    e.preventDefault();
-
-    const form = e.currentTarget;
-    const username = val(form, 'username');
-    const email = val(form, 'email').toLowerCase();
-    const password = val(form, 'password');
-
-    if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
-      return toast(
-        'Username must be 3–24 letters, numbers, or underscores.',
-        true
-      );
-    }
-
-    if (password.length < 8) {
-      return toast('Password must be at least 8 characters.', true);
-    }
-
-    const button = $('button[type=submit]', form);
-    button.disabled = true;
-
+  async function signup(form) {
+    clearAuthMessage();
+    setBusy(form, true);
     try {
-      const { data, error } = await db.auth.signUp({
+      const fd = new FormData(form);
+      const displayName = String(fd.get("display_name") || "").trim();
+      const username = String(fd.get("username") || "").trim().toLowerCase();
+      const email = String(fd.get("email") || "").trim();
+      const password = String(fd.get("password") || "");
+
+      if (!/^[a-zA-Z0-9_]{3,24}$/.test(username)) {
+        throw new Error("Username must be 3–24 characters using letters, numbers, or underscores.");
+      }
+      if (password.length < 8) throw new Error("Password must be at least 8 characters.");
+
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          emailRedirectTo: location.origin + '/',
-          data: {
-            username,
-            display_name: username
-          }
+          data: { display_name: displayName, username },
+          emailRedirectTo: window.location.origin
         }
       });
-
       if (error) throw error;
 
-      if (data.session) {
-        await ensureProfile(data.user, username);
-        await init(data.session);
-        toast('Account created.');
+      if (data.session && data.user) {
+        await enterApp(data.user);
       } else {
-        toast(
-          'Account submitted. Check your email and click the confirmation link before logging in.'
-        );
+        setAuthMessage("Account submitted. Check your email and click the confirmation link before logging in. Check your spam folder if you don't see it.");
+        form.reset();
       }
-    } catch (e) {
-      console.error(e);
-      toast(errorText(e), true);
+    } catch (error) {
+      setAuthMessage(error.message || "Unable to create your account.", true);
     } finally {
-      button.disabled = false;
+      setBusy(form, false);
     }
   }
 
-  async function login(e) {
-    e.preventDefault();
-
-    const form = e.currentTarget;
-    const button = $('button[type=submit]', form);
-    button.disabled = true;
-
+  async function enterApp(user) {
+    currentUser = user;
     try {
-      const { data, error } = await db.auth.signInWithPassword({
-        email: val(form, 'email').toLowerCase(),
-        password: val(form, 'password')
-      });
-
-      if (error) throw error;
-
-      await init(data.session);
-      toast('Welcome back.');
-    } catch (e) {
-      console.error(e);
-      toast(errorText(e), true);
-    } finally {
-      button.disabled = false;
+      await refreshProfile();
+      showApp(true);
+      await loadFeed();
+      await loadNotifications();
+      await loadPeople();
+      await loadMyPosts();
+      switchView("feed");
+    } catch (error) {
+      showApp(true);
+      showError(error, "Unable to load your profile");
     }
   }
 
   async function logout() {
-    const { error } = await db.auth.signOut({ scope: 'local' });
-
-    if (error) return toast(errorText(error), true);
-
-    state.user = null;
-    state.profile = null;
-    showAuth('login');
-    toast('Logged out. Your account remains saved.');
+    const { error } = await supabase.auth.signOut();
+    if (error) return showError(error, "Log out failed");
+    currentUser = null;
+    currentProfile = null;
+    showApp(false);
+    switchAuth("login");
+    toast("You have logged out.");
   }
 
-  async function reset() {
-    const email = prompt('Enter your account email:');
-    if (!email) return;
-
-    const { error } = await db.auth.resetPasswordForEmail(
-      email.trim().toLowerCase(),
-      { redirectTo: location.origin + '/' }
-    );
-
-    if (error) return toast(errorText(error), true);
-
-    toast('If the account exists, a password reset email has been requested.');
-  }
-
-  async function saveProfile(e) {
-    e.preventDefault();
-
-    const form = e.currentTarget;
-    const username = val(form, 'username');
-
-    if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
-      return toast(
-        'Username must be 3–24 letters, numbers, or underscores.',
-        true
-      );
+  async function forgotPassword() {
+    const email = $("#login-email").value.trim();
+    if (!email) {
+      setAuthMessage("Enter your email address first, then choose forgot password.", true);
+      return;
     }
-
-    const { data, error } = await db
-      .from('profiles')
-      .update({
-        username,
-        display_name: val(form, 'display_name') || username,
-        bio: val(form, 'bio')
-      })
-      .eq('id', state.user.id)
-      .select()
-      .single();
-
-    if (error) return toast(errorText(error), true);
-
-    state.profile = data;
-    await loadProfile();
-    toast('Profile saved.');
-  }
-
-  async function uploadPhoto(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      return toast('Choose a JPG, PNG, or WebP image.', true);
-    }
-
-    if (file.size > 3 * 1024 * 1024) {
-      return toast('Image must be under 3 MB.', true);
-    }
-
-    const ext = file.type === 'image/png'
-      ? 'png'
-      : file.type === 'image/webp'
-        ? 'webp'
-        : 'jpg';
-
-    const path = `${state.user.id}/avatar-${Date.now()}.${ext}`;
-
-    const upload = await db.storage
-      .from('avatars')
-      .upload(path, file, {
-        upsert: true,
-        contentType: file.type
+    clearAuthMessage();
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin
       });
-
-    if (upload.error) {
-      console.error(upload.error);
-      return toast(
-        "Upload failed. Create the public 'avatars' bucket and configure its Storage policies in Supabase.",
-        true
-      );
+      if (error) throw error;
+      setAuthMessage("If the email is registered, a password reset link will be sent. Check your inbox and spam folder.");
+    } catch (error) {
+      setAuthMessage(error.message || "Could not request a password reset.", true);
     }
-
-    const url = db.storage
-      .from('avatars')
-      .getPublicUrl(path).data.publicUrl;
-
-    const { data, error } = await db
-      .from('profiles')
-      .update({ avatar_url: url })
-      .eq('id', state.user.id)
-      .select()
-      .single();
-
-    if (error) return toast(errorText(error), true);
-
-    state.profile = data;
-    await loadProfile();
-    toast('Profile photo updated.');
-    e.target.value = '';
   }
 
-  async function createPost(e) {
-    e.preventDefault();
-
-    const content = val(e.currentTarget, 'content');
+  async function createPost(form) {
+    const fd = new FormData(form);
+    const content = String(fd.get("content") || "").trim();
     if (!content) return;
-
-    const { error } = await db
-      .from('posts')
-      .insert({
-        user_id: state.user.id,
+    setBusy(form, true);
+    try {
+      const { error } = await supabase.from("posts").insert({
+        user_id: currentUser.id,
         content
       });
+      if (error) throw error;
+      form.reset();
+      await loadFeed();
+      await loadMyPosts();
+      toast("Your post was published.");
+    } catch (error) {
+      showError(error, "Could not publish post");
+    } finally {
+      setBusy(form, false);
+    }
+  }
 
-    if (error) return toast(errorText(error), true);
-
-    e.currentTarget.reset();
-    await loadFeed();
-    toast('Post published.');
+  async function fetchProfiles(userIds) {
+    const ids = [...new Set(userIds.filter(Boolean))];
+    if (!ids.length) return {};
+    const { data, error } = await supabase.from("profiles")
+      .select("id, username, display_name, bio, avatar_url").in("id", ids);
+    if (error) throw error;
+    return Object.fromEntries((data || []).map(profile => [profile.id, profile]));
   }
 
   async function loadFeed() {
-    const box = $('#feed');
-    box.innerHTML = '<div class="panel">Loading posts…</div>';
+    const container = $("#feed-list");
+    container.innerHTML = '<div class="panel empty-state">Loading posts…</div>';
+    try {
+      const { data: posts, error } = await supabase.from("posts")
+        .select("id, user_id, content, created_at").order("created_at", { ascending: false }).limit(50);
+      if (error) throw error;
+      if (!posts?.length) {
+        container.innerHTML = '<div class="panel empty-state">No posts yet. Be the first to share something!</div>';
+        return;
+      }
 
-    const { data: posts, error } = await db
-      .from('posts')
-      .select('id,user_id,content,created_at')
-      .order('created_at', { ascending: false })
-      .limit(50);
+      const ids = posts.map(post => post.user_id);
+      const profiles = await fetchProfiles(ids);
+      const postIds = posts.map(post => post.id);
 
-    if (error) {
-      console.error(error);
-      box.innerHTML =
-        '<div class="panel">Unable to load posts. Check your posts table and RLS policies.</div>';
-      return;
-    }
+      const [likesResult, commentsResult, myLikesResult] = await Promise.all([
+        supabase.from("likes").select("post_id, user_id").in("post_id", postIds),
+        supabase.from("comments").select("id, post_id, user_id, content, created_at").in("post_id", postIds).order("created_at", { ascending: true }),
+        supabase.from("likes").select("post_id").eq("user_id", currentUser.id).in("post_id", postIds)
+      ]);
+      if (likesResult.error) throw likesResult.error;
+      if (commentsResult.error) throw commentsResult.error;
+      if (myLikesResult.error) throw myLikesResult.error;
 
-    if (!posts?.length) {
-      box.innerHTML =
-        '<div class="panel">No posts yet. Share the first update.</div>';
-      return;
-    }
+      const likes = likesResult.data || [];
+      const comments = commentsResult.data || [];
+      const likedIds = new Set((myLikesResult.data || []).map(row => row.post_id));
+      const commentProfiles = await fetchProfiles(comments.map(comment => comment.user_id));
 
-    const ids = [...new Set(posts.map(p => p.user_id))];
-    const postIds = posts.map(p => p.id);
-
-    const [profilesResult, likesResult] = await Promise.all([
-      db.from('profiles')
-        .select('id,username,display_name,avatar_url')
-        .in('id', ids),
-
-      db.from('likes')
-        .select('post_id,user_id')
-        .in('post_id', postIds)
-    ]);
-
-    const people = Object.fromEntries(
-      (profilesResult.data || []).map(p => [p.id, p])
-    );
-
-    const likes = likesResult.data || [];
-
-    box.innerHTML = posts.map(post => {
-      const person = people[post.user_id] || {};
-      const name = person.display_name || person.username || 'Member';
-
-      const liked = likes.some(like =>
-        like.post_id === post.id &&
-        like.user_id === state.user.id
-      );
-
-      const count = likes.filter(
-        like => like.post_id === post.id
-      ).length;
-
-      return `
-        <article class="post" data-post="${esc(post.id)}">
-          <header class="posthead">
-            <div class="avatar">
-              ${person.avatar_url
-                ? `<img src="${esc(person.avatar_url)}" alt="">`
-                : esc(initials(name))}
+      container.innerHTML = posts.map(post => {
+        const profile = profiles[post.user_id] || {};
+        const postComments = comments.filter(comment => comment.post_id === post.id);
+        const count = likes.filter(like => like.post_id === post.id).length;
+        return `
+          <article class="panel post-card" data-post-id="${escapeHTML(post.id)}">
+            <div class="post-head">
+              <img class="avatar" alt="" src="${escapeHTML(avatarURL(profile))}">
+              <div class="post-author">
+                <strong>${escapeHTML(profile.display_name || profile.username || "Member")}</strong>
+                <div class="post-meta">@${escapeHTML(profile.username || "member")} · ${escapeHTML(formatDate(post.created_at))}</div>
+              </div>
             </div>
-            <div>
-              <strong>${esc(name)}</strong>
-              <small>
-                @${esc(person.username || 'member')} ·
-                ${esc(post.created_at
-                  ? new Date(post.created_at).toLocaleString()
-                  : '')}
-              </small>
+            <div class="post-content">${escapeHTML(post.content)}</div>
+            <div class="post-actions">
+              <button class="action-btn ${likedIds.has(post.id) ? "liked" : ""}" data-action="like" type="button">
+                <i data-lucide="heart"></i><span>${count}</span> Like
+              </button>
+              <button class="action-btn" data-action="focus-comment" type="button">
+                <i data-lucide="message-circle"></i><span>${postComments.length}</span> Comment
+              </button>
+              ${post.user_id === currentUser.id ? '<button class="action-btn" data-action="delete-post" type="button"><i data-lucide="trash-2"></i> Delete</button>' : ""}
             </div>
-          </header>
-
-          <p class="posttext">${esc(post.content)}</p>
-
-          <div class="actions">
-            <button data-action="like"
-                    data-id="${esc(post.id)}"
-                    data-liked="${liked}">
-              <i data-lucide="heart"></i>
-              ${liked ? 'Liked' : 'Like'} · ${count}
-            </button>
-
-            <button data-action="comments" data-id="${esc(post.id)}">
-              <i data-lucide="message-circle"></i> Comment
-            </button>
-          </div>
-
-          <div class="comments" hidden></div>
-        </article>
-      `;
-    }).join('');
-
-    window.lucide?.createIcons();
+            <div class="comment-list">${postComments.map(comment => {
+              const author = commentProfiles[comment.user_id] || {};
+              return `<div class="comment"><strong>${escapeHTML(author.display_name || author.username || "Member")}</strong>${escapeHTML(comment.content)}</div>`;
+            }).join("")}</div>
+            <form class="comment-form" data-post-id="${escapeHTML(post.id)}">
+              <input name="content" maxlength="500" placeholder="Write a comment…" aria-label="Write a comment" required>
+              <button type="submit" aria-label="Send comment"><i data-lucide="send"></i></button>
+            </form>
+          </article>`;
+      }).join("");
+      window.lucide?.createIcons();
+    } catch (error) {
+      container.innerHTML = '<div class="panel empty-state">Could not load posts. Check your Supabase tables and RLS policies.</div>';
+      showError(error, "Feed error");
+    }
   }
 
-  async function like(id, button) {
-    const liked = button.dataset.liked === 'true';
-
-    const result = liked
-      ? await db.from('likes')
-          .delete()
-          .eq('post_id', id)
-          .eq('user_id', state.user.id)
-      : await db.from('likes').insert({
-          post_id: id,
-          user_id: state.user.id
+  async function toggleLike(postId, button) {
+    try {
+      const { data: existing, error: findError } = await supabase.from("likes")
+        .select("post_id").eq("post_id", postId).eq("user_id", currentUser.id).maybeSingle();
+      if (findError) throw findError;
+      if (existing) {
+        const { error } = await supabase.from("likes").delete()
+          .eq("post_id", postId).eq("user_id", currentUser.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("likes").insert({
+          post_id: postId, user_id: currentUser.id
         });
-
-    if (result.error) return toast(errorText(result.error), true);
-
-    await loadFeed();
+        if (error) throw error;
+      }
+      await loadFeed();
+    } catch (error) {
+      showError(error, "Could not update like");
+    }
   }
 
-  async function comments(id, article) {
-    const box = $('.comments', article);
-
-    if (!box.hidden) {
-      box.hidden = true;
-      return;
-    }
-
-    box.hidden = false;
-    box.innerHTML = '<p>Loading comments…</p>';
-
-    const { data, error } = await db
-      .from('comments')
-      .select('id,user_id,content,created_at')
-      .eq('post_id', id)
-      .order('created_at');
-
-    if (error) {
-      box.innerHTML =
-        '<p>Comments unavailable. Check the comments table and policies.</p>';
-      return;
-    }
-
-    const ids = [...new Set((data || []).map(c => c.user_id))];
-
-    const result = ids.length
-      ? await db.from('profiles')
-          .select('id,username,display_name')
-          .in('id', ids)
-      : { data: [] };
-
-    const people = Object.fromEntries(
-      (result.data || []).map(p => [p.id, p])
-    );
-
-    box.innerHTML =
-      (data || []).map(comment => `
-        <div class="comment">
-          <strong>
-            ${esc(
-              people[comment.user_id]?.display_name ||
-              people[comment.user_id]?.username ||
-              'Member'
-            )}
-          </strong>
-          ${esc(comment.content)}
-        </div>
-      `).join('') +
-      `
-        <form class="commentform" data-post="${esc(id)}">
-          <input name="content" maxlength="2000"
-                 placeholder="Write a comment…" required>
-          <button aria-label="Send" type="submit">
-            <i data-lucide="send"></i>
-          </button>
-        </form>
-      `;
-
-    window.lucide?.createIcons();
-  }
-
-  async function submitComment(e) {
-    e.preventDefault();
-
-    const id = e.currentTarget.dataset.post;
-    const content = val(e.currentTarget, 'content');
-
+  async function submitComment(form) {
+    const postId = form.dataset.postId;
+    const content = String(new FormData(form).get("content") || "").trim();
     if (!content) return;
-
-    const { error } = await db.from('comments').insert({
-      post_id: id,
-      user_id: state.user.id,
-      content
-    });
-
-    if (error) return toast(errorText(error), true);
-
-    await comments(id, e.currentTarget.closest('.post'));
-    toast('Comment added.');
+    const button = $('button[type="submit"]', form);
+    if (button) button.disabled = true;
+    try {
+      const { error } = await supabase.from("comments").insert({
+        post_id: postId, user_id: currentUser.id, content
+      });
+      if (error) throw error;
+      await loadFeed();
+    } catch (error) {
+      showError(error, "Could not add comment");
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
-  async function loadPeople(term = '') {
-    const box = $('#people');
-    box.innerHTML = '<div class="panel">Loading people…</div>';
-
-    let query = db.from('profiles')
-      .select('id,username,display_name,bio,avatar_url')
-      .order('username')
-      .limit(100);
-
-    if (term) query = query.ilike('username', `%${term}%`);
-
-    const { data, error } = await query;
-
-    if (error) {
-      box.innerHTML =
-        '<div class="panel">Unable to load profiles. Check table access.</div>';
-      return;
+  async function deletePost(postId) {
+    if (!confirm("Delete this post? This cannot be undone.")) return;
+    try {
+      const { error } = await supabase.from("posts").delete()
+        .eq("id", postId).eq("user_id", currentUser.id);
+      if (error) throw error;
+      await loadFeed();
+      await loadMyPosts();
+      toast("Post deleted.");
+    } catch (error) {
+      showError(error, "Could not delete post");
     }
-
-    const people = (data || []).filter(
-      person => person.id !== state.user.id
-    );
-
-    if (!people.length) {
-      box.innerHTML =
-        '<div class="panel">No matching members found.</div>';
-      return;
-    }
-
-    const result = await db.from('follows')
-      .select('following_id')
-      .eq('follower_id', state.user.id);
-
-    const following = new Set(
-      (result.data || []).map(row => row.following_id)
-    );
-
-    box.innerHTML = people.map(person => `
-      <article class="person">
-        ${person.avatar_url
-          ? `<img class="avatar" src="${esc(person.avatar_url)}" alt="">`
-          : `<b class="avatar">${esc(initials(person.display_name || person.username))}</b>`}
-
-        <h3>${esc(person.display_name || person.username || 'Member')}</h3>
-        <p>@${esc(person.username || 'member')}</p>
-        <p>${esc(person.bio || 'A TALKATCH community member.')}</p>
-
-        <button class="secondary"
-                data-action="follow"
-                data-user="${esc(person.id)}"
-                data-following="${following.has(person.id)}">
-          ${following.has(person.id) ? 'Following' : 'Follow'}
-        </button>
-      </article>
-    `).join('');
   }
 
-  async function follow(id, button) {
-    const isFollowing = button.dataset.following === 'true';
-
-    const result = isFollowing
-      ? await db.from('follows')
-          .delete()
-          .eq('follower_id', state.user.id)
-          .eq('following_id', id)
-      : await db.from('follows').insert({
-          follower_id: state.user.id,
-          following_id: id
+  async function saveProfile(form) {
+    const fd = new FormData(form);
+    const username = String(fd.get("username") || "").trim().toLowerCase();
+    const displayName = String(fd.get("display_name") || "").trim();
+    const bio = String(fd.get("bio") || "").trim();
+    const file = $("#profile-avatar").files[0];
+    if (!/^[a-zA-Z0-9_]{3,24}$/.test(username)) {
+      return toast("Username must be 3–24 characters using letters, numbers, or underscores.");
+    }
+    setBusy(form, true);
+    try {
+      let avatar_url = currentProfile?.avatar_url || null;
+      if (file) {
+        if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+          throw new Error("Please upload a JPG, PNG, or WebP image.");
+        }
+        if (file.size > 3 * 1024 * 1024) throw new Error("Avatar must be 3 MB or smaller.");
+        const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+        const path = `${currentUser.id}/${Date.now()}.${extension}`;
+        const { error: uploadError } = await supabase.storage.from("avatars").upload(path, file, {
+          upsert: true, contentType: file.type
         });
+        if (uploadError) throw uploadError;
+        const { data: publicData } = supabase.storage.from("avatars").getPublicUrl(path);
+        avatar_url = publicData.publicUrl;
+      }
 
-    if (result.error) return toast(errorText(result.error), true);
+      const { data, error } = await supabase.from("profiles").upsert({
+        id: currentUser.id, username, display_name: displayName, bio, avatar_url
+      }, { onConflict: "id" }).select("id, username, display_name, bio, avatar_url").single();
+      if (error) throw error;
+      currentProfile = data;
+      renderProfileSummary();
+      fillProfileForm();
+      $("#profile-avatar").value = "";
+      await loadFeed();
+      await loadMyPosts();
+      toast("Profile saved.");
+    } catch (error) {
+      showError(error, "Could not save profile");
+    } finally {
+      setBusy(form, false);
+    }
+  }
 
-    await loadPeople($('#search').value.trim());
+  async function loadPeople() {
+    const container = $("#people-list");
+    container.innerHTML = '<div class="panel empty-state">Loading community…</div>';
+    try {
+      const { data, error } = await supabase.from("profiles")
+        .select("id, username, display_name, bio, avatar_url")
+        .neq("id", currentUser.id).order("username").limit(50);
+      if (error) throw error;
 
-    toast(isFollowing ? 'Unfollowed member.' : 'Now following member.');
+      const { data: follows, error: followError } = await supabase.from("follows")
+        .select("following_id").eq("follower_id", currentUser.id);
+      if (followError) throw followError;
+      const following = new Set((follows || []).map(row => row.following_id));
+
+      if (!data?.length) {
+        container.innerHTML = '<div class="panel empty-state">You’re one of the first here. Invite others to join TALKATCH!</div>';
+        return;
+      }
+
+      container.innerHTML = data.map(person => `
+        <article class="panel person-card" data-person-id="${escapeHTML(person.id)}">
+          <img class="avatar" alt="" src="${escapeHTML(avatarURL(person))}">
+          <h3>${escapeHTML(person.display_name || person.username || "Member")}</h3>
+          <p class="muted">@${escapeHTML(person.username || "member")}</p>
+          <p class="muted">${escapeHTML(person.bio || "A member of the TALKATCH community.")}</p>
+          <button class="btn ${following.has(person.id) ? "btn-outline" : "btn-primary"} full" data-action="follow" type="button">
+            ${following.has(person.id) ? "Following" : "Follow"}
+          </button>
+        </article>`).join("");
+      window.lucide?.createIcons();
+    } catch (error) {
+      container.innerHTML = '<div class="panel empty-state">Could not load people. Check your profiles and follows table policies.</div>';
+      showError(error, "Community error");
+    }
+  }
+
+  async function toggleFollow(personId) {
+    try {
+      const { data: existing, error: findError } = await supabase.from("follows")
+        .select("follower_id").eq("follower_id", currentUser.id)
+        .eq("following_id", personId).maybeSingle();
+      if (findError) throw findError;
+      if (existing) {
+        const { error } = await supabase.from("follows").delete()
+          .eq("follower_id", currentUser.id).eq("following_id", personId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("follows").insert({
+          follower_id: currentUser.id, following_id: personId
+        });
+        if (error) throw error;
+      }
+      await loadPeople();
+      toast(existing ? "You unfollowed this member." : "You are now following this member.");
+    } catch (error) {
+      showError(error, "Could not update follow");
+    }
   }
 
   async function loadNotifications() {
-    const box = $('#notifications');
-
-    const { data, error } = await db.from('notifications')
-      .select('id,type,message,created_at,is_read')
-      .eq('user_id', state.user.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-
-    if (error) {
-      box.innerHTML =
-        '<div class="panel">Notifications are unavailable. Check the notifications table and policies.</div>';
-      return;
+    const container = $("#notifications-list");
+    try {
+      const { data, error } = await supabase.from("notifications")
+        .select("id, type, message, created_at, is_read")
+        .eq("user_id", currentUser.id).order("created_at", { ascending: false }).limit(50);
+      if (error) throw error;
+      const rows = data || [];
+      const unread = rows.filter(row => !row.is_read).length;
+      $("#notification-count").textContent = String(unread);
+      $("#notification-count").classList.toggle("hidden", unread === 0);
+      container.innerHTML = rows.length ? rows.map(row => `
+        <article class="panel post-card">
+          <strong>${escapeHTML(row.type || "Notification")}</strong>
+          <p>${escapeHTML(row.message || "You have a new notification.")}</p>
+          <div class="post-meta">${escapeHTML(formatDate(row.created_at))}${row.is_read ? " · Read" : " · Unread"}</div>
+        </article>`).join("") :
+        '<div class="panel empty-state">You’re all caught up. Notifications will appear here when available.</div>';
+    } catch (error) {
+      container.innerHTML = '<div class="panel empty-state">Notifications are not available. Check your notifications table and RLS policies.</div>';
+      showError(error, "Notifications error");
     }
-
-    box.innerHTML = data?.length
-      ? data.map(notification => `
-          <article class="post">
-            <strong>
-              ${esc(notification.message || notification.type || 'Notification')}
-            </strong>
-            <p>
-              ${esc(notification.created_at
-                ? new Date(notification.created_at).toLocaleString()
-                : '')}
-            </p>
-          </article>
-        `).join('')
-      : '<div class="panel">No notifications yet.</div>';
   }
 
-  document.addEventListener('submit', e => {
-    if (e.target.id === 'loginForm') login(e);
-    else if (e.target.id === 'signupForm') signup(e);
-    else if (e.target.id === 'postForm') createPost(e);
-    else if (e.target.id === 'profileForm') saveProfile(e);
-    else if (e.target.matches('.commentform')) submitComment(e);
-  });
-
-  document.addEventListener('click', e => {
-    const button = e.target.closest('button');
-    if (!button) return;
-
-    if (button.dataset.tab) return showAuth(button.dataset.tab);
-    if (button.id === 'logout') return logout();
-    if (button.id === 'forgot') return reset();
-
-    if (button.id === 'theme') {
-      return theme(
-        document.body.dataset.theme === 'light' ? 'dark' : 'light'
-      );
+  async function markAllRead() {
+    try {
+      const { error } = await supabase.from("notifications").update({ is_read: true })
+        .eq("user_id", currentUser.id).eq("is_read", false);
+      if (error) throw error;
+      await loadNotifications();
+      toast("Notifications marked as read.");
+    } catch (error) {
+      showError(error, "Could not mark notifications read");
     }
-
-    if (button.id === 'accent') {
-      setView('settings');
-      return;
-    }
-
-    if (button.id === 'refresh') return loadFeed();
-    if (button.dataset.theme) return theme(button.dataset.theme);
-    if (button.dataset.color) return accent(button.dataset.color);
-    if (button.dataset.view) return setView(button.dataset.view);
-
-    if (button.dataset.action === 'like')
-      return like(button.dataset.id, button);
-
-    if (button.dataset.action === 'comments')
-      return comments(button.dataset.id, button.closest('.post'));
-
-    if (button.dataset.action === 'follow')
-      return follow(button.dataset.user, button);
-  });
-
-  $('#avatarFile').addEventListener('change', uploadPhoto);
-
-  $('#search').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && state.user) {
-      setView('discover');
-      loadPeople(e.currentTarget.value.trim());
-    }
-  });
-
-  theme(localStorage.getItem('talkatch-theme') || 'dark');
-  accent(localStorage.getItem('talkatch-accent') || '#a78bfa');
-  window.lucide?.createIcons();
-
-  // This route is hidden from navigation, but is not an admin system.
-  if (location.pathname.replace(/\/+$/, '') === '/admin') {
-    document.body.innerHTML = `
-      <main style="max-width:620px;margin:12vh auto;padding:24px;font:15px system-ui">
-        <h1>TALKATCH Admin</h1>
-        <p>
-          Admin tools are not enabled yet. Configure a verified admin role
-          and enforce access with Supabase RLS or secure server-side functions
-          before adding admin actions.
-        </p>
-        <a href="/">Return to TALKATCH</a>
-      </main>
-    `;
-    return;
   }
 
-  db.auth.getSession()
-    .then(({ data, error }) => {
-      if (error) {
-        console.error(error);
-        return showAuth();
-      }
+  async function loadMyPosts() {
+    const container = $("#my-posts");
+    try {
+      const { data, error } = await supabase.from("posts")
+        .select("id, content, created_at").eq("user_id", currentUser.id)
+        .order("created_at", { ascending: false }).limit(30);
+      if (error) throw error;
+      container.innerHTML = data?.length ? data.map(post => `
+        <article class="panel post-card">
+          <div class="post-meta">${escapeHTML(formatDate(post.created_at))}</div>
+          <div class="post-content">${escapeHTML(post.content)}</div>
+          <button class="action-btn" data-action="delete-post" data-post-id="${escapeHTML(post.id)}" type="button">
+            <i data-lucide="trash-2"></i> Delete
+          </button>
+        </article>`).join("") :
+        '<div class="panel empty-state">You haven’t posted anything yet.</div>';
+      window.lucide?.createIcons();
+    } catch (error) {
+      container.innerHTML = '<div class="panel empty-state">Could not load your posts.</div>';
+      console.error(error);
+    }
+  }
 
-      return init(data.session);
-    })
-    .catch(e => {
-      console.error(e);
-      showAuth();
+  function switchView(view) {
+    const valid = ["feed", "people", "notifications", "profile"].includes(view) ? view : "feed";
+    $$(".content-view").forEach(section => section.classList.add("hidden"));
+    $(`#${valid}-view`).classList.remove("hidden");
+    $$(".nav-item").forEach(button => button.classList.toggle("active", button.dataset.view === valid));
+    if (valid === "feed") loadFeed();
+    if (valid === "people") loadPeople();
+    if (valid === "notifications") loadNotifications();
+    if (valid === "profile") { fillProfileForm(); loadMyPosts(); }
+  }
+
+  function bindEvents() {
+    $$("[data-auth-tab]").forEach(button => button.addEventListener("click", () => switchAuth(button.dataset.authTab)));
+    $("#theme").addEventListener("click", () => {
+      setTheme(document.body.dataset.theme === "dark" ? "light" : "dark");
+    });
+    $("#logout-btn").addEventListener("click", logout);
+    $("#forgot-password").addEventListener("click", forgotPassword);
+    $("#refresh-feed").addEventListener("click", loadFeed);
+    $("#mark-read").addEventListener("click", markAllRead);
+
+    // Use the actual form from the submit event, never document as FormData's argument.
+    document.addEventListener("submit", async event => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement)) return;
+
+      if (["loginForm", "signupForm", "postForm", "profileForm"].includes(form.id) ||
+          form.matches(".comment-form")) {
+        event.preventDefault();
+      } else return;
+
+      if (!currentUser && !["loginForm", "signupForm"].includes(form.id)) return;
+
+      if (form.id === "loginForm") await login(form);
+      else if (form.id === "signupForm") await signup(form);
+      else if (form.id === "postForm") await createPost(form);
+      else if (form.id === "profileForm") await saveProfile(form);
+      else if (form.matches(".comment-form")) await submitComment(form);
     });
 
-  db.auth.onAuthStateChange((event, session) => {
-    if (event === 'SIGNED_OUT') {
-      state.user = null;
-      state.profile = null;
-      showAuth();
-    } else if (event === 'SIGNED_IN') {
-      state.user = session?.user || null;
-    }
-  });
+    document.addEventListener("click", async event => {
+      const viewButton = event.target.closest("[data-view]");
+      if (viewButton) {
+        switchView(viewButton.dataset.view);
+        return;
+      }
 
-  window.TALKATCH = {
-    db,
-    logout,
-    loadFeed,
-    loadPeople,
-    loadNotifications,
-    setView
-  };
+      const button = event.target.closest("[data-action]");
+      if (!button || !currentUser) return;
+      const action = button.dataset.action;
+
+      if (action === "like") {
+        const post = button.closest("[data-post-id]");
+        if (post) await toggleLike(post.dataset.postId, button);
+      } else if (action === "focus-comment") {
+        const form = button.closest(".post-card")?.querySelector(".comment-form input");
+        form?.focus();
+      } else if (action === "delete-post") {
+        const postId = button.dataset.postId || button.closest("[data-post-id]")?.dataset.postId;
+        if (postId) await deletePost(postId);
+      } else if (action === "follow") {
+        const personId = button.closest("[data-person-id]")?.dataset.personId;
+        if (personId) await toggleFollow(personId);
+      }
+    });
+
+    $("#profile-avatar").addEventListener("change", () => {
+      const file = $("#profile-avatar").files[0];
+      if (file && file.size <= 3 * 1024 * 1024 && ["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        $("#profile-avatar-preview").src = URL.createObjectURL(file);
+      } else if (file) {
+        toast("Choose a JPG, PNG, or WebP image under 3 MB.");
+        $("#profile-avatar").value = "";
+      }
+    });
+  }
+
+  async function init() {
+    $("#year").textContent = String(new Date().getFullYear());
+    setTheme((() => { try { return localStorage.getItem("talkatch-theme") || "dark"; } catch { return "dark"; } })());
+    window.lucide?.createIcons();
+    bindEvents();
+
+    if (!config.supabaseUrl || !config.supabasePublishableKey ||
+        config.supabasePublishableKey.includes("PASTE_YOUR")) {
+      showApp(false);
+      setAuthMessage("Setup needed: add your Supabase publishable key to config.js.", true);
+      return;
+    }
+
+    if (!window.supabase?.createClient) {
+      setAuthMessage("Supabase could not load. Check your internet connection and refresh.", true);
+      return;
+    }
+
+    supabase = window.supabase.createClient(config.supabaseUrl, config.supabasePublishableKey);
+
+    const { data, error } = await supabase.auth.getSession();
+    if (error) {
+      setAuthMessage(error.message, true);
+      return;
+    }
+    if (data.session?.user) await enterApp(data.session.user);
+    else showApp(false);
+
+    supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        currentUser = null;
+        currentProfile = null;
+        showApp(false);
+      } else if (event === "SIGNED_IN" && session?.user && session.user.id !== currentUser?.id) {
+        // Defer DB work so it does not run inside the auth callback.
+        setTimeout(() => enterApp(session.user), 0);
+      } else if (event === "PASSWORD_RECOVERY") {
+        toast("Password recovery opened. Use your configured recovery flow to set a new password.");
+      }
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
 })();
