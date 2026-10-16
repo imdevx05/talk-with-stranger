@@ -2,10 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TALKATCH — Connect & Chat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#6558e8">
+  <title>TALKATCH — Your Community</title>
 
   <link rel="stylesheet" href="css/style.css">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -14,233 +19,335 @@
 </head>
 
 <body>
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <!-- AUTHENTICATION -->
   <section id="auth-screen" class="auth-screen">
-    <div class="auth-card">
-      <div class="brand brand-large">
-        <div class="brand-logo">T</div>
-        <span>TALKATCH</span>
-      </div>
+    <div class="auth-brand">
+      <div class="brand-icon"><i data-lucide="messages-square"></i></div>
+      <span>TALKATCH</span>
+    </div>
 
-      <p class="muted">Connect with people. Talk freely.</p>
+    <div class="auth-card">
+      <h1 id="auth-heading">Welcome back</h1>
+      <p class="muted">Connect, share, and find your community.</p>
 
       <div class="auth-tabs">
-        <button id="login-tab" class="active" type="button">Login</button>
+        <button id="login-tab" class="active" type="button">Log in</button>
         <button id="signup-tab" type="button">Create account</button>
       </div>
 
       <form id="loginForm">
-        <label>Email</label>
-        <input name="email" type="email" placeholder="you@example.com"
-               autocomplete="email" required>
+        <label for="login-email">Email address</label>
+        <input id="login-email" name="email" type="email"
+               autocomplete="email" placeholder="you@example.com" required>
 
-        <label>Password</label>
-        <input name="password" type="password" placeholder="Your password"
-               autocomplete="current-password" required>
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password"
+               autocomplete="current-password" placeholder="Your password" required>
 
-        <button class="primary-btn full-width" type="submit">Login</button>
+        <button class="primary-btn full" type="submit">
+          <i data-lucide="log-in"></i> Log in
+        </button>
+
+        <button id="forgot-password" class="text-btn full" type="button">
+          Forgot your password?
+        </button>
       </form>
 
       <form id="signupForm" hidden>
-        <label>Display name</label>
-        <input name="display_name" type="text" maxlength="50"
+        <label for="signup-name">Display name</label>
+        <input id="signup-name" name="display_name" maxlength="50"
                placeholder="Your name" required>
 
-        <label>Username</label>
-        <input name="username" type="text" minlength="3" maxlength="24"
-               pattern="[A-Za-z0-9_]+" placeholder="your_username" required>
+        <label for="signup-username">Username</label>
+        <input id="signup-username" name="username" minlength="3"
+               maxlength="24" pattern="[A-Za-z0-9_]+"
+               placeholder="your_username" required>
 
-        <label>Email</label>
-        <input name="email" type="email" placeholder="you@example.com"
-               autocomplete="email" required>
+        <label for="signup-email">Email address</label>
+        <input id="signup-email" name="email" type="email"
+               autocomplete="email" placeholder="you@example.com" required>
 
-        <label>Password</label>
-        <input name="password" type="password" minlength="8"
-               placeholder="At least 8 characters"
-               autocomplete="new-password" required>
+        <label for="signup-password">Password</label>
+        <input id="signup-password" name="password" type="password"
+               minlength="8" autocomplete="new-password"
+               placeholder="At least 8 characters" required>
 
-        <button class="primary-btn full-width" type="submit">
-          Create account
+        <button class="primary-btn full" type="submit">
+          <i data-lucide="user-plus"></i> Create account
         </button>
       </form>
 
       <p id="auth-message" class="auth-message"></p>
-      <p class="muted small">By continuing, you agree to use TALKATCH responsibly.</p>
+      <p class="auth-legal">Use a valid email address to receive your confirmation email.</p>
     </div>
   </section>
 
   <!-- MAIN APPLICATION -->
   <div id="app-screen" class="app-shell" hidden>
 
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-logo">T</div>
+    <!-- LEFT NAVIGATION -->
+    <aside class="left-sidebar">
+      <a class="brand" href="#" aria-label="TALKATCH home">
+        <span class="brand-icon"><i data-lucide="messages-square"></i></span>
         <span>TALKATCH</span>
-      </div>
+      </a>
 
-      <button id="my-account" class="my-account">
-        <img id="my-avatar" src="" alt="Your profile">
-        <span>
-          <strong id="my-name">My account</strong>
-          <small id="my-username">@username</small>
-        </span>
+      <button class="nav-item active" data-view="home">
+        <i data-lucide="house"></i><span>Home feed</span>
       </button>
 
-      <div class="sidebar-label">MESSAGES</div>
+      <button class="nav-item" data-view="explore">
+        <i data-lucide="compass"></i><span>Explore people</span>
+      </button>
 
-      <div class="search-box">
-        <i data-lucide="search"></i>
-        <input id="user-search" type="search" placeholder="Find people">
-      </div>
+      <button class="nav-item" data-view="notifications">
+        <i data-lucide="bell"></i><span>Notifications</span>
+      </button>
 
-      <div id="people-list" class="people-list"></div>
+      <button class="nav-item" data-view="profile">
+        <i data-lucide="user-round"></i><span>My profile</span>
+      </button>
 
-      <div class="sidebar-bottom">
-        <button id="theme-toggle" class="secondary-btn">
-          <i data-lucide="moon"></i> Toggle theme
-        </button>
+      <button class="nav-item" data-view="messages">
+        <i data-lucide="messages-square"></i><span>Messages</span>
+      </button>
 
-        <button id="logout-btn" class="secondary-btn">
-          <i data-lucide="log-out"></i> Log out
+      <div class="sidebar-spacer"></div>
+
+      <button id="theme-toggle" class="nav-item">
+        <i data-lucide="moon"></i><span>Toggle appearance</span>
+      </button>
+
+      <button id="logout-btn" class="nav-item">
+        <i data-lucide="log-out"></i><span>Log out</span>
+      </button>
+
+      <div class="sidebar-user">
+        <img id="sidebar-avatar" src="" alt="">
+        <div class="sidebar-user-info">
+          <strong id="sidebar-name">Your name</strong>
+          <small id="sidebar-username">@username</small>
+        </div>
+        <button id="open-profile" class="icon-btn" title="Edit profile">
+          <i data-lucide="settings"></i>
         </button>
       </div>
     </aside>
 
-    <main class="chat-area">
+    <!-- CENTRAL CONTENT -->
+    <main class="main-content">
 
-      <header class="chat-header">
-        <button id="back-to-people" class="icon-btn mobile-only"
-                aria-label="Back to people">
-          <i data-lucide="arrow-left"></i>
+      <header class="mobile-header">
+        <a class="brand" href="#">
+          <span class="brand-icon"><i data-lucide="messages-square"></i></span>
+          <span>TALKATCH</span>
+        </a>
+        <button id="mobile-theme-toggle" class="icon-btn" aria-label="Toggle theme">
+          <i data-lucide="moon"></i>
         </button>
+      </header>
 
-        <div class="chat-person">
-          <img id="chat-avatar" src="" alt="">
+      <!-- HOME FEED -->
+      <section id="view-home" class="view">
+        <div class="page-heading">
           <div>
-            <h2 id="chat-name">Welcome to TALKATCH</h2>
-            <p id="chat-status">Select someone to start chatting</p>
+            <h1>Your community</h1>
+            <p>See what people are sharing today.</p>
+          </div>
+          <button id="refresh-feed" class="icon-btn" title="Refresh feed">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
+
+        <div class="composer card">
+          <div class="composer-top">
+            <img id="composer-avatar" class="avatar" src="" alt="">
+            <textarea id="post-content" rows="3" maxlength="5000"
+                      placeholder="What's on your mind?"></textarea>
+          </div>
+
+          <div id="post-image-preview" class="post-image-preview" hidden>
+            <img id="preview-image" src="" alt="Post image preview">
+            <button id="remove-post-image" type="button" class="icon-btn"
+                    aria-label="Remove image">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+
+          <div class="composer-bottom">
+            <label class="composer-action">
+              <i data-lucide="image"></i>
+              <span>Photo</span>
+              <input id="post-image" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+            </label>
+
+            <button id="publish-post" class="primary-btn">
+              <i data-lucide="send"></i> Publish
+            </button>
           </div>
         </div>
 
-        <div class="chat-actions">
-          <button id="voice-call-btn" class="icon-btn" title="Voice call"
-                  aria-label="Voice call" disabled>
-            <i data-lucide="phone"></i>
-          </button>
+        <div id="feed-list" class="feed-list">
+          <div class="loading">Loading your feed...</div>
+        </div>
+      </section>
 
-          <button id="video-call-btn" class="icon-btn" title="Video call"
-                  aria-label="Video call" disabled>
-            <i data-lucide="video"></i>
+      <!-- EXPLORE -->
+      <section id="view-explore" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <h1>Discover people</h1>
+            <p>Find people to follow and connect with.</p>
+          </div>
+        </div>
+
+        <div class="search-bar card">
+          <i data-lucide="search"></i>
+          <input id="explore-search" type="search"
+                 placeholder="Search usernames and display names">
+        </div>
+
+        <div id="explore-list" class="people-grid"></div>
+      </section>
+
+      <!-- NOTIFICATIONS -->
+      <section id="view-notifications" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <h1>Notifications</h1>
+            <p>Keep up with activity on your account.</p>
+          </div>
+          <button id="refresh-notifications" class="icon-btn" title="Refresh">
+            <i data-lucide="refresh-cw"></i>
           </button>
         </div>
-      </header>
 
-      <div id="empty-chat" class="empty-chat">
-        <div class="empty-icon">
-          <i data-lucide="messages-square"></i>
+        <div id="notifications-list" class="card notifications-list">
+          <p class="muted">Loading notifications...</p>
         </div>
-        <h2>Your conversations, all in one place</h2>
-        <p>Choose a person from the sidebar to start a private conversation.</p>
-      </div>
+      </section>
 
-      <section id="conversation" class="conversation" hidden>
-        <div id="messages-list" class="messages-list"></div>
+      <!-- PROFILE -->
+      <section id="view-profile" class="view" hidden>
+        <div id="profile-page" class="profile-page"></div>
+      </section>
 
-        <div id="typing-indicator" class="typing-indicator"></div>
+      <!-- MESSAGES -->
+      <section id="view-messages" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <h1>Messages</h1>
+            <p>Private conversations with other users.</p>
+          </div>
+        </div>
 
-        <form id="messageForm" class="message-composer">
-          <label class="attach-btn" title="Attach a file">
-            <i data-lucide="paperclip"></i>
-            <input id="file-input" type="file" hidden>
-          </label>
+        <div class="messenger card">
+          <div class="messenger-users">
+            <div class="search-bar">
+              <i data-lucide="search"></i>
+              <input id="message-user-search" type="search"
+                     placeholder="Find someone">
+            </div>
+            <div id="message-people-list"></div>
+          </div>
 
-          <input id="message-input" type="text" maxlength="5000"
-                 placeholder="Write a message..." autocomplete="off">
+          <div class="messenger-chat">
+            <div id="message-empty" class="empty-state">
+              <i data-lucide="messages-square"></i>
+              <h2>Your conversations</h2>
+              <p>Choose someone to start a private chat.</p>
+            </div>
 
-          <button class="send-btn" type="submit" aria-label="Send message">
-            <i data-lucide="send"></i>
-          </button>
-        </form>
+            <div id="chat-panel" class="chat-panel" hidden>
+              <header class="chat-header">
+                <img id="chat-avatar" class="avatar" src="" alt="">
+                <div class="chat-header-info">
+                  <strong id="chat-name">Conversation</strong>
+                  <small id="chat-username"></small>
+                </div>
+              </header>
 
-        <p id="attachment-status" class="attachment-status"></p>
+              <div id="chat-messages" class="chat-messages"></div>
+
+              <form id="chat-form" class="chat-composer">
+                <label class="icon-btn attach-label" title="Attach file">
+                  <i data-lucide="paperclip"></i>
+                  <input id="chat-file" type="file" hidden>
+                </label>
+
+                <input id="chat-input" maxlength="5000"
+                       placeholder="Write a message..." autocomplete="off">
+
+                <button class="primary-btn" type="submit" aria-label="Send message">
+                  <i data-lucide="send"></i>
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
+
+    <!-- RIGHT SIDEBAR -->
+    <aside class="right-sidebar">
+      <div class="card side-card">
+        <div class="side-heading">
+          <h3>Suggested for you</h3>
+          <button id="refresh-suggestions" class="text-btn">Refresh</button>
+        </div>
+        <div id="suggested-users"></div>
+        <button class="text-btn full" data-view="explore">Discover more people</button>
+      </div>
+
+      <div class="card side-card">
+        <div class="side-heading">
+          <h3>Your account</h3>
+          <i data-lucide="shield-check"></i>
+        </div>
+        <p class="muted small">
+          Protect your account. Never share your password or private information.
+        </p>
+      </div>
+
+      <footer class="site-footer">
+        TALKATCH · Connect with your community
+      </footer>
+    </aside>
   </div>
 
-  <!-- CALL WINDOW -->
-  <div id="call-modal" class="call-modal" hidden>
-    <div class="call-card">
-      <div class="call-heading">
-        <h2 id="call-title">Call</h2>
-        <p id="call-status">Connecting...</p>
-      </div>
-
-      <div id="incoming-call-actions" class="incoming-call-actions" hidden>
-        <button id="accept-call-btn" class="primary-btn">
-          Accept call
-        </button>
-        <button id="decline-call-btn" class="danger-btn">
-          Decline
-        </button>
-      </div>
-
-      <div id="video-container" class="video-container">
-        <video id="remote-video" autoplay playsinline></video>
-        <video id="local-video" autoplay muted playsinline></video>
-      </div>
-
-      <div class="call-controls">
-        <button id="mute-btn" class="icon-btn" title="Mute microphone">
-          <i data-lucide="mic"></i>
-        </button>
-
-        <button id="camera-btn" class="icon-btn" title="Toggle camera">
-          <i data-lucide="video"></i>
-        </button>
-
-        <button id="end-call-btn" class="danger-btn">
-          <i data-lucide="phone-off"></i> End call
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- PROFILE EDITOR -->
+  <!-- EDIT PROFILE MODAL -->
   <div id="profile-modal" class="modal" hidden>
     <form id="profileForm" class="modal-card">
       <div class="modal-heading">
-        <h2>Edit profile</h2>
-        <button id="close-profile-btn" class="icon-btn" type="button"
-                aria-label="Close">
+        <h2>Edit your profile</h2>
+        <button id="close-profile" type="button" class="icon-btn" aria-label="Close">
           <i data-lucide="x"></i>
         </button>
       </div>
 
-      <img id="profile-avatar-preview" class="profile-preview"
-           src="" alt="Profile preview">
+      <div class="profile-upload">
+        <img id="profile-avatar-preview" src="" alt="Profile preview">
+        <label class="primary-btn">
+          <i data-lucide="camera"></i> Change photo
+          <input id="profile-avatar-file" type="file"
+                 accept="image/jpeg,image/png,image/webp" hidden>
+        </label>
+      </div>
 
-      <label>Profile picture</label>
-      <input id="profile-avatar-file" type="file"
-             accept="image/png,image/jpeg,image/webp">
+      <label for="edit-display-name">Display name</label>
+      <input id="edit-display-name" maxlength="50" required>
 
-      <label>Display name</label>
-      <input id="profile-display-name" name="display_name"
-             maxlength="50" required>
-
-      <label>Username</label>
-      <input id="profile-username" name="username"
-             minlength="3" maxlength="24"
+      <label for="edit-username">Username</label>
+      <input id="edit-username" minlength="3" maxlength="24"
              pattern="[A-Za-z0-9_]+" required>
 
-      <label>About me</label>
-      <textarea id="profile-bio" name="bio"
-                maxlength="300" rows="3"></textarea>
+      <label for="edit-bio">Bio</label>
+      <textarea id="edit-bio" maxlength="300" rows="3"
+                placeholder="Tell people about yourself"></textarea>
 
-      <button class="primary-btn full-width" type="submit">
-        Save profile
-      </button>
+      <button class="primary-btn full" type="submit">Save changes</button>
     </form>
   </div>
 </body>
