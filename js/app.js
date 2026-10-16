@@ -2,243 +2,230 @@
   "use strict";
 
   const config = window.TALKATCH_CONFIG || {};
-  const $ = (selector) => document.querySelector(selector);
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-  let supabase;
-  let currentUser = null;
-  let currentProfile = null;
-  let activePerson = null;
-  let activeChannel = null;
-  let messagesChannel = null;
-  let people = [];
+  let db;
+  let user = null;
+  let profile = null;
+  let profiles = [];
+  let selectedChat = null;
+  let chatChannel = null;
+  let feedChannel = null;
+  let pendingPostFile = null;
+  let pendingAvatarFile = null;
   let toastTimer;
-  let pc = null;
-  let localStream = null;
-  let callId = null;
-  let callMode = "audio";
-  let callDirection = null;
-  let pendingOffer = null;
-  let pendingIce = [];
-  let callChannel = null;
-  let callWatcher = null;
-  let makingOffer = false;
 
+  const BUCKET_AVATARS = "avatars";
+  const BUCKET_POSTS = "post-images";
+  const BUCKET_FILES = "chat-files";
+  const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
   const MAX_FILE_SIZE = 15 * 1024 * 1024;
-  const FILE_BUCKET = "chat-files";
-  const AVATAR_BUCKET = "avatars";
-
-  const rtcConfig = {
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" }
-    ]
-  };
 
   function toast(message) {
-    const el = $("#toast");
-    if (!el) return;
+    const element = $("#toast");
+    if (!element) return;
 
-    el.textContent = message;
-    el.classList.add("show");
+    element.textContent = message;
+    element.classList.add("show");
 
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove("show"), 3500);
+    toastTimer = setTimeout(() => element.classList.remove("show"), 3500);
   }
 
-  function escapeHTML(value = "") {
-    return String(value).replace(/[&<>"']/g, (char) => ({
+  function esc(value = "") {
+    return String(value).replace(/[&<>"']/g, character => ({
       "&": "&amp;",
       "<": "&lt;",
       ">": "&gt;",
       '"': "&quot;",
       "'": "&#39;"
-    })[char]);
+    })[character]);
   }
 
-  function avatarURL(profile) {
-    if (profile && profile.avatar_url) return profile.avatar_url;
-
-    const name = encodeURIComponent(
-      (profile && (profile.display_name || profile.username)) || "User"
-    );
-
-    return `https://ui-avatars.com/api/?name=${name}&background=6658e8&color=fff`;
+  function icon(name) {
+    return `<i data-lucide="${esc(name)}"></i>`;
   }
 
-  function refreshIcons() {
+  function icons() {
     try {
-      if (window.lucide) window.lucide.createIcons();
+      window.lucide?.createIcons();
     } catch (error) {
-      console.warn("Icon rendering error:", error);
+      console.warn("Icon rendering failed", error);
     }
   }
 
-  function setAuthMessage(message) {
-    const el = $("#auth-message");
-    if (el) el.textContent = message;
+  function avatar(person) {
+    if (person?.avatar_url) return person.avatar_url;
+
+    const name = encodeURIComponent(
+      person?.display_name || person?.username || "User"
+    );
+
+    return `https://ui-avatars.com/api/?name=${name}&background=6558e8&color=fff`;
+  }
+
+  function setMessage(message) {
+    $("#auth-message").textContent = message || "";
   }
 
   function showAuth() {
-    if ($("#auth-screen")) $("#auth-screen").hidden = false;
-    if ($("#app-screen")) $("#app-screen").hidden = true;
-
-    document.body.classList.remove("chat-open");
+    $("#auth-screen").hidden = false;
+    $("#app-screen").hidden = true;
   }
 
   function showApp() {
-    if ($("#auth-screen")) $("#auth-screen").hidden = true;
-    if ($("#app-screen")) $("#app-screen").hidden = false;
-
-    refreshIcons();
+    $("#auth-screen").hidden = true;
+    $("#app-screen").hidden = false;
+    icons();
   }
 
-  function setAuthTab(tab) {
-    const login = tab === "login";
+  function setAuthMode(mode) {
+    const login = mode === "login";
 
-    if ($("#loginForm")) $("#loginForm").hidden = !login;
-    if ($("#signupForm")) $("#signupForm").hidden = login;
+    $("#loginForm").hidden = !login;
+    $("#signupForm").hidden = login;
 
-    $("#login-tab")?.classList.toggle("active", login);
-    $("#signup-tab")?.classList.toggle("active", !login);
+    $("#login-tab").classList.toggle("active", login);
+    $("#signup-tab").classList.toggle("active", !login);
 
-    setAuthMessage("");
+    $("#auth-heading").textContent = login
+      ? "Welcome back"
+      : "Join the community";
+
+    setMessage("");
+    icons();
   }
 
-  function showConversation(person) {
-    activePerson = person;
-
-    $("#empty-chat").hidden = true;
-    $("#conversation").hidden = false;
-
-    $("#chat-name").textContent =
-      person.display_name || person.username || "Conversation";
-
-    $("#chat-status").textContent =
-      person.bio || `@${person.username || "user"}`;
-
-    $("#chat-avatar").src = avatarURL(person);
-
-    $("#voice-call-btn").disabled = false;
-    $("#video-call-btn").disabled = false;
-
-    document.body.classList.add("chat-open");
-
-    $$(".person").forEach((button) => {
-      button.classList.toggle(
-        "active",
-        button.dataset.id === person.id
-      );
+  function switchView(name) {
+    $$(".view").forEach(view => {
+      view.hidden = view.id !== `view-${name}`;
     });
+
+    $$(".nav-item[data-view]").forEach(button => {
+      button.classList.toggle("active", button.dataset.view === name);
+    });
+
+    if (name === "home") loadFeed();
+    if (name === "explore") renderExplore();
+    if (name === "notifications") loadNotifications();
+    if (name === "profile") renderProfilePage(user.id);
+    if (name === "messages") renderMessagePeople();
+
+    icons();
   }
 
-  function $$(selector) {
-    return [...document.querySelectorAll(selector)];
-  }
-
-  async function getProfile(userId) {
-    const { data, error } = await supabase
+  async function getProfile(id) {
+    const { data, error } = await db
       .from("profiles")
       .select("*")
-      .eq("id", userId)
+      .eq("id", id)
       .maybeSingle();
 
     if (error) throw error;
 
     if (data) return data;
 
-    const metadata = currentUser?.user_metadata || {};
+    const metadata = user.user_metadata || {};
 
-    const fallback = {
-      id: userId,
-      username: metadata.username || `user_${userId.slice(0, 8)}`,
+    const row = {
+      id,
+      username: metadata.username || `user_${id.slice(0, 8)}`,
       display_name: metadata.display_name || "New user",
       bio: "",
       avatar_url: null
     };
 
-    const { data: inserted, error: insertError } = await supabase
+    const { data: created, error: insertError } = await db
       .from("profiles")
-      .upsert(fallback, { onConflict: "id" })
+      .insert(row)
       .select()
       .single();
 
     if (insertError) throw insertError;
 
-    return inserted;
+    return created;
   }
 
   async function loadProfile() {
-    currentProfile = await getProfile(currentUser.id);
+    profile = await getProfile(user.id);
 
-    $("#my-name").textContent =
-      currentProfile.display_name || currentProfile.username;
+    $("#sidebar-avatar").src = avatar(profile);
+    $("#sidebar-name").textContent = profile.display_name || profile.username;
+    $("#sidebar-username").textContent = `@${profile.username}`;
+    $("#composer-avatar").src = avatar(profile);
 
-    $("#my-username").textContent = `@${currentProfile.username}`;
+    $("#profile-avatar-preview").src = avatar(profile);
+    $("#edit-display-name").value = profile.display_name || "";
+    $("#edit-username").value = profile.username || "";
+    $("#edit-bio").value = profile.bio || "";
+  }
 
-    $("#my-avatar").src = avatarURL(currentProfile);
-    $("#profile-avatar-preview").src = avatarURL(currentProfile);
-    $("#profile-display-name").value = currentProfile.display_name || "";
-    $("#profile-username").value = currentProfile.username || "";
-    $("#profile-bio").value = currentProfile.bio || "";
+  async function enterApp(sessionUser) {
+    user = sessionUser;
+    showApp();
+
+    try {
+      await loadProfile();
+    } catch (error) {
+      console.error("Profile loading failed:", error);
+      toast("Profile error. Check the profiles table and RLS policies.");
+    }
+
+    await Promise.allSettled([
+      loadPeople(),
+      loadFeed(),
+      loadNotifications()
+    ]);
+
+    startFeedRealtime();
+    icons();
   }
 
   async function loadPeople() {
-    const list = $("#people-list");
-    if (!list) return;
-
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("profiles")
-      .select("id, username, display_name, bio, avatar_url")
-      .neq("id", currentUser.id)
-      .order("display_name")
-      .limit(100);
+      .select("id,username,display_name,bio,avatar_url,created_at")
+      .neq("id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(150);
 
     if (error) {
-      console.error("Unable to load users:", error);
-      list.textContent = "Unable to load users. Check database policies.";
+      console.error("People loading failed:", error);
+      toast("Unable to load suggested users.");
       return;
     }
 
-    people = data || [];
-    renderPeople();
+    profiles = data || [];
+
+    renderSuggestions();
+    renderExplore();
+    renderMessagePeople();
   }
 
-  function renderPeople() {
-    const list = $("#people-list");
-    if (!list) return;
+  function renderSuggestions() {
+    const root = $("#suggested-users");
+    root.replaceChildren();
 
-    const search = ($("#user-search")?.value || "")
-      .trim()
-      .toLowerCase();
+    const suggestions = profiles
+      .filter(person => person.id !== user.id)
+      .slice(0, 6);
 
-    const filtered = people.filter((person) => {
-      return `${person.display_name || ""} ${person.username || ""}`
-        .toLowerCase()
-        .includes(search);
-    });
-
-    list.replaceChildren();
-
-    if (!filtered.length) {
-      const empty = document.createElement("p");
-      empty.className = "muted small";
-      empty.textContent = "No users found.";
-      list.appendChild(empty);
+    if (!suggestions.length) {
+      root.innerHTML = '<p class="muted small">Invite others to join TALKATCH.</p>';
       return;
     }
 
-    filtered.forEach((person) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "person";
-      button.dataset.id = person.id;
+    suggestions.forEach(person => {
+      const row = document.createElement("div");
+      row.className = "suggested-user";
 
-      const avatar = document.createElement("img");
-      avatar.src = avatarURL(person);
-      avatar.alt = "";
-      avatar.loading = "lazy";
+      const image = document.createElement("img");
+      image.src = avatar(person);
+      image.alt = "";
 
-      const details = document.createElement("span");
+      const info = document.createElement("div");
+      info.className = "suggested-info";
 
       const name = document.createElement("strong");
       name.textContent = person.display_name || person.username;
@@ -246,99 +233,874 @@
       const username = document.createElement("small");
       username.textContent = `@${person.username}`;
 
-      details.append(name, username);
-      button.append(avatar, details);
+      info.append(name, username);
 
-      button.addEventListener("click", () => openChat(person));
+      const follow = document.createElement("button");
+      follow.className = "follow-small";
+      follow.type = "button";
+      follow.title = "Follow user";
+      follow.innerHTML = icon("user-plus");
+      follow.addEventListener("click", () => toggleFollow(person.id));
 
-      list.appendChild(button);
+      row.append(image, info, follow);
+      root.appendChild(row);
     });
 
-    refreshIcons();
+    icons();
   }
 
-  function conversationFilter(personId) {
-    return `and(sender_id.eq.${currentUser.id},recipient_id.eq.${personId}),and(sender_id.eq.${personId},recipient_id.eq.${currentUser.id})`;
+  function renderExplore() {
+    const root = $("#explore-list");
+    if (!root) return;
+
+    const query = ($("#explore-search").value || "").trim().toLowerCase();
+
+    const matches = profiles.filter(person =>
+      `${person.display_name || ""} ${person.username || ""}`
+        .toLowerCase()
+        .includes(query)
+    );
+
+    root.replaceChildren();
+
+    if (!matches.length) {
+      root.innerHTML = '<div class="empty-message">No people found.</div>';
+      return;
+    }
+
+    matches.forEach(person => {
+      const card = document.createElement("article");
+      card.className = "person-card";
+
+      const image = document.createElement("img");
+      image.src = avatar(person);
+      image.alt = "";
+
+      const name = document.createElement("strong");
+      name.textContent = person.display_name || person.username;
+
+      const username = document.createElement("small");
+      username.textContent = `@${person.username}`;
+
+      const bio = document.createElement("p");
+      bio.textContent = person.bio || "A member of the TALKATCH community.";
+
+      const follow = document.createElement("button");
+      follow.className = "primary-btn";
+      follow.type = "button";
+      follow.innerHTML = `${icon("user-plus")} Follow`;
+
+      follow.addEventListener("click", () => toggleFollow(person.id));
+
+      card.append(image, name, username, bio, follow);
+      root.appendChild(card);
+    });
+
+    icons();
+  }
+
+  async function toggleFollow(targetId) {
+    if (!targetId || targetId === user.id) return;
+
+    const { data: existing, error: findError } = await db
+      .from("follows")
+      .select("follower_id,following_id")
+      .eq("follower_id", user.id)
+      .eq("following_id", targetId)
+      .maybeSingle();
+
+    if (findError) {
+      console.error(findError);
+      toast("Unable to update follow. Check database policies.");
+      return;
+    }
+
+    if (existing) {
+      const { error } = await db
+        .from("follows")
+        .delete()
+        .eq("follower_id", user.id)
+        .eq("following_id", targetId);
+
+      if (error) {
+        toast(error.message);
+        return;
+      }
+
+      toast("Unfollowed.");
+    } else {
+      const { error } = await db.from("follows").insert({
+        follower_id: user.id,
+        following_id: targetId
+      });
+
+      if (error) {
+        toast(error.message);
+        return;
+      }
+
+      await createNotification(
+        targetId,
+        "follow",
+        `${profile?.display_name || "Someone"} started following you.`
+      );
+
+      toast("Now following.");
+    }
+
+    await renderProfilePage(user.id);
+  }
+
+  async function uploadFile(bucket, file, folder) {
+    if (!file) return null;
+
+    const extension = file.name.includes(".")
+      ? file.name.split(".").pop().toLowerCase().replace(/[^a-z0-9]/g, "")
+      : "bin";
+
+    const path = `${folder}/${crypto.randomUUID()}.${extension}`;
+
+    const { error } = await db.storage
+      .from(bucket)
+      .upload(path, file, {
+        upsert: false,
+        contentType: file.type || "application/octet-stream"
+      });
+
+    if (error) throw error;
+
+    const { data } = db.storage.from(bucket).getPublicUrl(path);
+
+    return { path, url: data.publicUrl };
+  }
+
+  async function publishPost() {
+    const content = $("#post-content").value.trim();
+
+    if (!content && !pendingPostFile) {
+      toast("Write something or attach an image.");
+      return;
+    }
+
+    const button = $("#publish-post");
+    button.disabled = true;
+
+    try {
+      let imageUrl = null;
+      let imagePath = null;
+
+      if (pendingPostFile) {
+        if (pendingPostFile.size > MAX_IMAGE_SIZE) {
+          throw new Error("Post images must be 5 MB or smaller.");
+        }
+
+        if (!["image/jpeg", "image/png", "image/webp"].includes(pendingPostFile.type)) {
+          throw new Error("Please upload a JPG, PNG, or WebP image.");
+        }
+
+        const uploaded = await uploadFile(
+          BUCKET_POSTS,
+          pendingPostFile,
+          user.id
+        );
+
+        imageUrl = uploaded.url;
+        imagePath = uploaded.path;
+      }
+
+      const { error } = await db.from("posts").insert({
+        user_id: user.id,
+        content,
+        image_url: imageUrl,
+        image_path: imagePath
+      });
+
+      if (error) throw error;
+
+      $("#post-content").value = "";
+      pendingPostFile = null;
+      $("#post-image").value = "";
+      $("#post-image-preview").hidden = true;
+
+      toast("Your post has been published.");
+      await loadFeed();
+    } catch (error) {
+      console.error(error);
+      toast(error.message || "Unable to publish your post.");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function loadFeed() {
+    const root = $("#feed-list");
+    if (!root || !user) return;
+
+    root.innerHTML = '<div class="loading">Loading posts...</div>';
+
+    const { data, error } = await db
+      .from("posts")
+      .select(`
+        id,user_id,content,image_url,created_at,
+        profiles:user_id(id,username,display_name,avatar_url)
+      `)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error("Feed loading failed:", error);
+      root.innerHTML = '<div class="empty-message">Unable to load posts. Check your SQL setup.</div>';
+      return;
+    }
+
+    root.replaceChildren();
+
+    if (!data?.length) {
+      root.innerHTML = '<div class="card empty-message">No posts yet. Be the first to share something.</div>';
+      return;
+    }
+
+    for (const post of data) {
+      await renderPost(post, root);
+    }
+
+    icons();
+  }
+
+  async function renderPost(post, root) {
+    const author = post.profiles || {
+      id: post.user_id,
+      username: "user",
+      display_name: "Community member"
+    };
+
+    const article = document.createElement("article");
+    article.className = "post-card";
+    article.dataset.postId = post.id;
+
+    const header = document.createElement("div");
+    header.className = "post-header";
+
+    const image = document.createElement("img");
+    image.className = "avatar";
+    image.src = avatar(author);
+    image.alt = "";
+
+    const authorBlock = document.createElement("div");
+    authorBlock.className = "post-author";
+
+    const authorName = document.createElement("strong");
+    authorName.textContent = author.display_name || author.username;
+
+    const time = document.createElement("small");
+    time.textContent =
+      `@${author.username} · ${new Date(post.created_at).toLocaleString()}`;
+
+    authorBlock.append(authorName, time);
+    header.append(image, authorBlock);
+
+    const content = document.createElement("div");
+    content.className = "post-content";
+    content.textContent = post.content || "";
+
+    article.append(header);
+
+    if (post.content) article.append(content);
+
+    if (post.image_url) {
+      const postImage = document.createElement("img");
+      postImage.className = "post-image";
+      postImage.src = post.image_url;
+      postImage.alt = "Post attachment";
+      postImage.loading = "lazy";
+      article.append(postImage);
+    }
+
+    const stats = document.createElement("div");
+    stats.className = "post-stats";
+    stats.innerHTML = `
+      <span class="like-count">Loading likes...</span>
+      <span class="comment-count">Comments</span>
+    `;
+
+    const actions = document.createElement("div");
+    actions.className = "post-actions";
+
+    const likeButton = document.createElement("button");
+    likeButton.className = "post-action";
+    likeButton.innerHTML = `${icon("heart")} Like`;
+
+    const commentButton = document.createElement("button");
+    commentButton.className = "post-action";
+    commentButton.innerHTML = `${icon("message-circle")} Comment`;
+
+    const shareButton = document.createElement("button");
+    shareButton.className = "post-action";
+    shareButton.innerHTML = `${icon("share-2")} Share`;
+
+    actions.append(likeButton, commentButton, shareButton);
+
+    const comments = document.createElement("div");
+    comments.className = "comments";
+    comments.hidden = true;
+
+    const commentForm = document.createElement("form");
+    commentForm.className = "comment-form";
+
+    const commentInput = document.createElement("input");
+    commentInput.maxLength = 2000;
+    commentInput.placeholder = "Write a comment...";
+
+    const commentSubmit = document.createElement("button");
+    commentSubmit.type = "submit";
+    commentSubmit.innerHTML = icon("send");
+    commentSubmit.setAttribute("aria-label", "Send comment");
+
+    commentForm.append(commentInput, commentSubmit);
+    comments.appendChild(commentForm);
+
+    article.append(stats, actions, comments);
+    root.appendChild(article);
+
+    const [likesResult, commentsResult, myLikeResult] = await Promise.all([
+      db.from("likes").select("user_id", { count: "exact", head: true })
+        .eq("post_id", post.id),
+
+      db.from("comments")
+        .select(`
+          id,content,user_id,created_at,
+          profiles:user_id(username,display_name,avatar_url)
+        `)
+        .eq("post_id", post.id)
+        .order("created_at", { ascending: true })
+        .limit(50),
+
+      db.from("likes").select("post_id")
+        .eq("post_id", post.id)
+        .eq("user_id", user.id)
+        .maybeSingle()
+    ]);
+
+    if (likesResult.error) console.error(likesResult.error);
+    if (commentsResult.error) console.error(commentsResult.error);
+    if (myLikeResult.error) console.error(myLikeResult.error);
+
+    const likeCount = likesResult.count || 0;
+    const commentRows = commentsResult.data || [];
+    const liked = Boolean(myLikeResult.data);
+
+    stats.querySelector(".like-count").textContent =
+      `${likeCount} ${likeCount === 1 ? "like" : "likes"}`;
+
+    stats.querySelector(".comment-count").textContent =
+      `${commentRows.length} ${commentRows.length === 1 ? "comment" : "comments"}`;
+
+    likeButton.classList.toggle("liked", liked);
+    likeButton.innerHTML = `${icon("heart")} ${liked ? "Liked" : "Like"}`;
+
+    likeButton.addEventListener("click", async () => {
+      likeButton.disabled = true;
+
+      try {
+        if (likeButton.classList.contains("liked")) {
+          const { error } = await db.from("likes")
+            .delete()
+            .eq("post_id", post.id)
+            .eq("user_id", user.id);
+
+          if (error) throw error;
+
+          likeButton.classList.remove("liked");
+          likeButton.innerHTML = `${icon("heart")} Like`;
+        } else {
+          const { error } = await db.from("likes").insert({
+            post_id: post.id,
+            user_id: user.id
+          });
+
+          if (error && error.code !== "23505") throw error;
+
+          likeButton.classList.add("liked");
+          likeButton.innerHTML = `${icon("heart")} Liked`;
+        }
+
+        const { count } = await db.from("likes")
+          .select("*", { count: "exact", head: true })
+          .eq("post_id", post.id);
+
+        stats.querySelector(".like-count").textContent =
+          `${count || 0} ${(count || 0) === 1 ? "like" : "likes"}`;
+
+        if (post.user_id !== user.id) {
+          await createNotification(
+            post.user_id,
+            "like",
+            `${profile.display_name} liked your post.`
+          );
+        }
+      } catch (error) {
+        console.error(error);
+        toast("Unable to update like.");
+      } finally {
+        likeButton.disabled = false;
+        icons();
+      }
+    });
+
+    commentButton.addEventListener("click", () => {
+      comments.hidden = !comments.hidden;
+      commentInput.focus();
+    });
+
+    shareButton.addEventListener("click", async () => {
+      const shareUrl = `${location.origin}${location.pathname}#post-${post.id}`;
+
+      try {
+        if (navigator.share) {
+          await navigator.share({
+            title: "TALKATCH post",
+            text: post.content || "Check out this post",
+            url: shareUrl
+          });
+        } else {
+          await navigator.clipboard.writeText(shareUrl);
+          toast("Post link copied.");
+        }
+      } catch (error) {
+        if (error.name !== "AbortError") toast("Unable to share post.");
+      }
+    });
+
+    commentRows.forEach(comment => {
+      addCommentElement(comments, comment);
+    });
+
+    commentForm.addEventListener("submit", async event => {
+      event.preventDefault();
+
+      const text = commentInput.value.trim();
+      if (!text) return;
+
+      commentSubmit.disabled = true;
+
+      try {
+        const { data, error } = await db.from("comments")
+          .insert({
+            post_id: post.id,
+            user_id: user.id,
+            content: text
+          })
+          .select(`
+            id,content,user_id,created_at,
+            profiles:user_id(username,display_name,avatar_url)
+          `)
+          .single();
+
+        if (error) throw error;
+
+        addCommentElement(comments, data, commentForm);
+        commentInput.value = "";
+
+        const count = comments.querySelectorAll(".comment").length;
+        stats.querySelector(".comment-count").textContent =
+          `${count} ${count === 1 ? "comment" : "comments"}`;
+
+        if (post.user_id !== user.id) {
+          await createNotification(
+            post.user_id,
+            "comment",
+            `${profile.display_name} commented on your post.`
+          );
+        }
+      } catch (error) {
+        console.error(error);
+        toast("Unable to publish comment.");
+      } finally {
+        commentSubmit.disabled = false;
+      }
+    });
+  }
+
+  function addCommentElement(root, comment, beforeElement) {
+    const row = document.createElement("div");
+    row.className = "comment";
+
+    const image = document.createElement("img");
+    image.src = avatar(comment.profiles);
+    image.alt = "";
+
+    const body = document.createElement("div");
+    body.className = "comment-body";
+
+    const name = document.createElement("strong");
+    name.textContent = comment.profiles?.display_name ||
+      comment.profiles?.username || "Member";
+
+    const text = document.createElement("p");
+    text.textContent = comment.content;
+
+    body.append(name, text);
+    row.append(image, body);
+
+    root.insertBefore(row, beforeElement || null);
+  }
+
+  async function createNotification(recipientId, type, message) {
+    if (!recipientId || recipientId === user.id) return;
+
+    const { error } = await db.from("notifications").insert({
+      user_id: recipientId,
+      actor_id: user.id,
+      type,
+      message
+    });
+
+    if (error) {
+      console.warn("Notification could not be created:", error.message);
+    }
+  }
+
+  async function loadNotifications() {
+    const root = $("#notifications-list");
+    if (!root || !user) return;
+
+    const { data, error } = await db.from("notifications")
+      .select(`
+        id,type,message,created_at,actor_id,
+        profiles:actor_id(username,display_name,avatar_url)
+      `)
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error("Notification loading failed:", error);
+      root.innerHTML = '<p class="muted">Unable to load notifications. Check your notifications table and policies.</p>';
+      return;
+    }
+
+    root.replaceChildren();
+
+    if (!data?.length) {
+      root.innerHTML = '<p class="muted">You have no notifications yet.</p>';
+      return;
+    }
+
+    data.forEach(notification => {
+      const row = document.createElement("div");
+      row.className = "notification";
+
+      const text = document.createElement("div");
+      text.textContent = notification.message || notification.type;
+
+      const time = document.createElement("small");
+      time.textContent = new Date(notification.created_at).toLocaleString();
+
+      row.append(text, time);
+      root.appendChild(row);
+    });
+  }
+
+  async function renderProfilePage(profileId) {
+    const root = $("#profile-page");
+    if (!root) return;
+
+    const isMine = profileId === user.id;
+
+    let person = isMine ? profile : profiles.find(p => p.id === profileId);
+
+    if (!person) {
+      const { data } = await db.from("profiles")
+        .select("*")
+        .eq("id", profileId)
+        .maybeSingle();
+
+      person = data;
+    }
+
+    if (!person) {
+      root.innerHTML = '<p class="muted">Profile not found.</p>';
+      return;
+    }
+
+    const [postsResult, followersResult, followingResult] = await Promise.all([
+      db.from("posts")
+        .select(`
+          id,user_id,content,image_url,created_at,
+          profiles:user_id(id,username,display_name,avatar_url)
+        `)
+        .eq("user_id", profileId)
+        .order("created_at", { ascending: false })
+        .limit(30),
+
+      db.from("follows")
+        .select("*", { count: "exact", head: true })
+        .eq("following_id", profileId),
+
+      db.from("follows")
+        .select("*", { count: "exact", head: true })
+        .eq("follower_id", profileId)
+    ]);
+
+    root.replaceChildren();
+
+    const card = document.createElement("div");
+    card.className = "profile-card";
+
+    const cover = document.createElement("div");
+    cover.className = "profile-cover";
+
+    const info = document.createElement("div");
+    info.className = "profile-info";
+
+    const image = document.createElement("img");
+    image.className = "profile-main-avatar";
+    image.src = avatar(person);
+    image.alt = "";
+
+    const line = document.createElement("div");
+    line.className = "profile-topline";
+
+    const text = document.createElement("div");
+
+    const name = document.createElement("h2");
+    name.textContent = person.display_name || person.username;
+
+    const username = document.createElement("div");
+    username.className = "muted";
+    username.textContent = `@${person.username}`;
+
+    text.append(name, username);
+
+    line.append(text);
+
+    if (isMine) {
+      const edit = document.createElement("button");
+      edit.className = "secondary-btn";
+      edit.innerHTML = `${icon("settings")} Edit profile`;
+      edit.addEventListener("click", () => {
+        $("#profile-modal").hidden = false;
+        icons();
+      });
+      line.appendChild(edit);
+    } else {
+      const follow = document.createElement("button");
+      follow.className = "primary-btn";
+      follow.innerHTML = `${icon("user-plus")} Follow`;
+      follow.addEventListener("click", () => toggleFollow(profileId));
+      line.appendChild(follow);
+    }
+
+    const bio = document.createElement("p");
+    bio.textContent = person.bio || "No bio added yet.";
+
+    const stats = document.createElement("div");
+    stats.className = "profile-stats";
+
+    stats.innerHTML = `
+      <div><strong>${postsResult.data?.length || 0}</strong><span>Posts</span></div>
+      <div><strong>${followersResult.count || 0}</strong><span>Followers</span></div>
+      <div><strong>${followingResult.count || 0}</strong><span>Following</span></div>
+    `;
+
+    info.append(image, line, bio, stats);
+    card.append(cover, info);
+    root.appendChild(card);
+
+    const heading = document.createElement("h2");
+    heading.textContent = isMine ? "Your posts" : "Posts";
+    root.appendChild(heading);
+
+    const feed = document.createElement("div");
+    feed.className = "feed-list";
+    root.appendChild(feed);
+
+    (postsResult.data || []).forEach(post => {
+      // Render individual profile posts through the common post renderer.
+      renderPost(post, feed);
+    });
+
+    if (postsResult.error) {
+      console.error(postsResult.error);
+      toast("Unable to load profile posts.");
+    }
+
+    icons();
+  }
+
+  async function saveProfile(event) {
+    event.preventDefault();
+
+    const displayName = $("#edit-display-name").value.trim();
+    const username = $("#edit-username").value.trim();
+    const bio = $("#edit-bio").value.trim();
+
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
+      toast("Username must be 3–24 letters, numbers, or underscores.");
+      return;
+    }
+
+    const submit = event.submitter;
+    if (submit) submit.disabled = true;
+
+    try {
+      const changes = {
+        id: user.id,
+        display_name: displayName,
+        username,
+        bio
+      };
+
+      if (pendingAvatarFile) {
+        if (pendingAvatarFile.size > MAX_IMAGE_SIZE) {
+          throw new Error("Profile pictures must be 5 MB or smaller.");
+        }
+
+        if (!["image/jpeg", "image/png", "image/webp"].includes(pendingAvatarFile.type)) {
+          throw new Error("Use a JPG, PNG, or WebP image.");
+        }
+
+        const uploaded = await uploadFile(
+          BUCKET_AVATARS,
+          pendingAvatarFile,
+          user.id
+        );
+
+        changes.avatar_url = uploaded.url;
+      }
+
+      const { error } = await db.from("profiles")
+        .update(changes)
+        .eq("id", user.id);
+
+      if (error) throw error;
+
+      pendingAvatarFile = null;
+
+      await loadProfile();
+      await loadPeople();
+
+      $("#profile-modal").hidden = true;
+      toast("Profile updated.");
+      await renderProfilePage(user.id);
+    } catch (error) {
+      console.error(error);
+      toast(error.message || "Unable to save profile.");
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  }
+
+  function renderMessagePeople() {
+    const root = $("#message-people-list");
+    if (!root) return;
+
+    const query = ($("#message-user-search").value || "").trim().toLowerCase();
+
+    const matches = profiles.filter(person =>
+      `${person.display_name || ""} ${person.username || ""}`
+        .toLowerCase()
+        .includes(query)
+    );
+
+    root.replaceChildren();
+
+    matches.forEach(person => {
+      const button = document.createElement("button");
+      button.className = "person-card";
+      button.type = "button";
+
+      const image = document.createElement("img");
+      image.src = avatar(person);
+      image.alt = "";
+
+      const name = document.createElement("strong");
+      name.textContent = person.display_name || person.username;
+
+      const username = document.createElement("small");
+      username.textContent = `@${person.username}`;
+
+      button.append(image, name, username);
+      button.addEventListener("click", () => openChat(person));
+
+      root.appendChild(button);
+    });
+  }
+
+  function messageFilter(personId) {
+    return `and(sender_id.eq.${user.id},recipient_id.eq.${personId}),and(sender_id.eq.${personId},recipient_id.eq.${user.id})`;
   }
 
   async function openChat(person) {
-    if (!person || person.id === currentUser.id) return;
+    selectedChat = person;
 
-    if (activeChannel) {
-      await supabase.removeChannel(activeChannel);
-      activeChannel = null;
+    if (chatChannel) {
+      await db.removeChannel(chatChannel);
+      chatChannel = null;
     }
 
-    activePerson = person;
-    showConversation(person);
+    $("#message-empty").hidden = true;
+    $("#chat-panel").hidden = false;
 
-    $("#messages-list").replaceChildren();
+    $("#chat-avatar").src = avatar(person);
+    $("#chat-name").textContent = person.display_name || person.username;
+    $("#chat-username").textContent = `@${person.username}`;
 
-    await loadMessages();
+    await loadChatMessages();
 
-    activeChannel = supabase
-      .channel(`chat:${[currentUser.id, person.id].sort().join(":")}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages"
-        },
-        (payload) => {
-          const message = payload.new;
+    chatChannel = db.channel(
+      `messages:${[user.id, person.id].sort().join(":")}`
+    ).on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "messages" },
+      payload => {
+        const message = payload.new;
 
-          const matches =
-            (message.sender_id === currentUser.id &&
-             message.recipient_id === activePerson?.id) ||
-            (message.sender_id === activePerson?.id &&
-             message.recipient_id === currentUser.id);
-
-          if (matches) renderMessage(message);
+        if (
+          (message.sender_id === user.id && message.recipient_id === selectedChat?.id) ||
+          (message.sender_id === selectedChat?.id && message.recipient_id === user.id)
+        ) {
+          appendChatMessage(message);
         }
-      )
-      .subscribe();
+      }
+    ).subscribe();
+
+    icons();
   }
 
-  async function loadMessages() {
-    if (!activePerson) return;
+  async function loadChatMessages() {
+    if (!selectedChat) return;
 
-    const { data, error } = await supabase
-      .from("messages")
+    const root = $("#chat-messages");
+    root.replaceChildren();
+
+    const { data, error } = await db.from("messages")
       .select("*")
-      .or(conversationFilter(activePerson.id))
+      .or(messageFilter(selectedChat.id))
       .order("created_at", { ascending: true })
-      .limit(200);
+      .limit(100);
 
     if (error) {
-      console.error("Message loading error:", error);
-      toast("Unable to load messages. Check your messages table and RLS policies.");
+      console.error(error);
+      toast("Unable to load messages. Check your messages table.");
       return;
     }
 
-    const list = $("#messages-list");
-    list.replaceChildren();
-
-    (data || []).forEach(renderMessage);
-    list.scrollTop = list.scrollHeight;
+    (data || []).forEach(appendChatMessage);
   }
 
-  function renderMessage(message) {
-    const list = $("#messages-list");
-    if (!list) return;
+  function appendChatMessage(message) {
+    const root = $("#chat-messages");
 
-    if (list.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`)) {
+    if (root.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`)) {
       return;
     }
 
-    const mine = message.sender_id === currentUser.id;
-    const wrapper = document.createElement("div");
-
-    wrapper.className = `message ${mine ? "mine" : ""}`;
-    wrapper.dataset.messageId = message.id;
-
+    const mine = message.sender_id === user.id;
     const bubble = document.createElement("div");
-    bubble.className = "message-bubble";
+
+    bubble.className = `chat-message ${mine ? "mine" : ""}`;
+    bubble.dataset.messageId = message.id;
 
     if (message.content) {
       const text = document.createElement("div");
@@ -348,684 +1110,161 @@
 
     if (message.file_url) {
       const link = document.createElement("a");
-
       link.href = message.file_url;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
-      link.className = "file-link";
-      link.textContent = `📎 ${message.file_name || "Open attachment"}`;
-
-      if (message.file_type?.startsWith("image/")) {
-        const image = document.createElement("img");
-        image.className = "file-preview";
-        image.src = message.file_url;
-        image.alt = message.file_name || "Image attachment";
-        image.loading = "lazy";
-        bubble.appendChild(image);
-      }
-
+      link.textContent = `Attachment: ${message.file_name || "Open file"}`;
+      link.style.textDecoration = "underline";
       bubble.appendChild(link);
     }
 
-    const time = document.createElement("div");
-    time.className = "message-time";
-
-    time.textContent = message.created_at
-      ? new Date(message.created_at).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit"
-        })
-      : "";
-
-    wrapper.append(bubble, time);
-    list.appendChild(wrapper);
-
-    list.scrollTop = list.scrollHeight;
-  }
-
-  async function sendMessage(content = "", attachment = null) {
-    if (!activePerson) {
-      toast("Select someone to message first.");
-      return;
-    }
-
-    let fileData = {};
-
-    if (attachment) {
-      if (attachment.size > MAX_FILE_SIZE) {
-        throw new Error("Files must be 15 MB or smaller.");
-      }
-
-      const safeName = attachment.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const path = `${currentUser.id}/${crypto.randomUUID()}-${safeName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from(FILE_BUCKET)
-        .upload(path, attachment, {
-          upsert: false,
-          contentType: attachment.type || "application/octet-stream"
-        });
-
-      if (uploadError) throw uploadError;
-
-      const { data: urlData } = supabase.storage
-        .from(FILE_BUCKET)
-        .getPublicUrl(path);
-
-      fileData = {
-        file_url: urlData.publicUrl,
-        file_name: attachment.name,
-        file_type: attachment.type || "application/octet-stream",
-        file_path: path
-      };
-    }
-
-    const row = {
-      sender_id: currentUser.id,
-      recipient_id: activePerson.id,
-      content: content.trim() || null,
-      ...fileData
-    };
-
-    const { data, error } = await supabase
-      .from("messages")
-      .insert(row)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    renderMessage(data);
-  }
-
-  async function onMessageSubmit(event) {
-    event.preventDefault();
-
-    const input = $("#message-input");
-    const content = input.value.trim();
-
-    if (!content) return;
-
-    input.disabled = true;
-
-    try {
-      await sendMessage(content);
-      input.value = "";
-    } catch (error) {
-      console.error(error);
-      toast(error.message || "Message could not be sent.");
-    } finally {
-      input.disabled = false;
-      input.focus();
-    }
-  }
-
-  async function onFileSelected(event) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-
-    if (!file) return;
-
-    try {
-      $("#attachment-status").textContent = `Uploading ${file.name}...`;
-      await sendMessage("", file);
-      $("#attachment-status").textContent = "File sent.";
-    } catch (error) {
-      console.error(error);
-      $("#attachment-status").textContent = "";
-      toast(error.message || "File upload failed.");
-    }
-  }
-
-  async function saveProfile(event) {
-    event.preventDefault();
-
-    const displayName = $("#profile-display-name").value.trim();
-    const username = $("#profile-username").value.trim();
-    const bio = $("#profile-bio").value.trim();
-    const file = $("#profile-avatar-file").files?.[0];
-
-    if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
-      toast("Username must be 3–24 letters, numbers, or underscores.");
-      return;
-    }
-
-    const changes = {
-      id: currentUser.id,
-      display_name: displayName,
-      username,
-      bio
-    };
-
-    try {
-      if (file) {
-        if (file.size > 3 * 1024 * 1024) {
-          throw new Error("Profile pictures must be 3 MB or smaller.");
-        }
-
-        if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-          throw new Error("Use a JPG, PNG, or WebP image.");
-        }
-
-        const extension = file.type === "image/png" ? "png" :
-          file.type === "image/webp" ? "webp" : "jpg";
-
-        const path = `${currentUser.id}/${crypto.randomUUID()}.${extension}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from(AVATAR_BUCKET)
-          .upload(path, file, { contentType: file.type });
-
-        if (uploadError) throw uploadError;
-
-        const { data } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(path);
-        changes.avatar_url = data.publicUrl;
-      }
-
-      const { error } = await supabase
-        .from("profiles")
-        .upsert(changes, { onConflict: "id" });
-
-      if (error) throw error;
-
-      await loadProfile();
-      await loadPeople();
-
-      $("#profile-modal").hidden = true;
-      toast("Profile updated.");
-    } catch (error) {
-      console.error(error);
-      toast(error.message || "Unable to save profile.");
-    }
-  }
-
-  /* WEBRTC CALLS */
-
-  async function getLocalMedia(mode) {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Camera and microphone access requires HTTPS.");
-    }
-
-    return navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: mode === "video"
+    const time = document.createElement("small");
+    time.textContent = new Date(message.created_at).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit"
     });
+
+    bubble.appendChild(time);
+    root.appendChild(bubble);
+    root.scrollTop = root.scrollHeight;
   }
 
-  function showCallModal(title, status) {
-    $("#call-modal").hidden = false;
-    $("#call-title").textContent = title;
-    $("#call-status").textContent = status;
-    refreshIcons();
-  }
+  async function sendChatMessage(event) {
+    event.preventDefault();
 
-  async function startCall(mode) {
-    if (!activePerson) {
-      toast("Select someone to call.");
+    if (!selectedChat) {
+      toast("Choose a user first.");
       return;
     }
 
-    if (callId) {
-      toast("A call is already active.");
+    const input = $("#chat-input");
+    const content = input.value.trim();
+    const file = $("#chat-file").files?.[0];
+
+    if (!content && !file) return;
+
+    if (file && file.size > MAX_FILE_SIZE) {
+      toast("Attachments must be 15 MB or smaller.");
       return;
     }
 
-    callMode = mode;
-    callDirection = "outgoing";
-    callId = crypto.randomUUID();
-    pendingIce = [];
+    const button = event.submitter;
+    if (button) button.disabled = true;
 
     try {
-      showCallModal(
-        `${mode === "video" ? "Video" : "Voice"} call`,
-        "Requesting microphone and camera..."
-      );
+      const row = {
+        sender_id: user.id,
+        recipient_id: selectedChat.id,
+        content: content || null
+      };
 
-      localStream = await getLocalMedia(mode);
-      $("#local-video").srcObject = localStream;
-      $("#local-video").hidden = mode !== "video";
+      if (file) {
+        const uploaded = await uploadFile(
+          BUCKET_FILES,
+          file,
+          user.id
+        );
 
-      pc = createPeerConnection();
+        row.file_url = uploaded.url;
+        row.file_path = uploaded.path;
+        row.file_name = file.name;
+        row.file_type = file.type || "application/octet-stream";
+      }
 
-      localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream);
-      });
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      const { error } = await supabase.from("call_signals").insert({
-        call_id: callId,
-        sender_id: currentUser.id,
-        recipient_id: activePerson.id,
-        kind: "offer",
-        payload: {
-          sdp: offer.sdp,
-          mode
-        }
-      });
+      const { data, error } = await db.from("messages")
+        .insert(row)
+        .select()
+        .single();
 
       if (error) throw error;
 
-      $("#incoming-call-actions").hidden = true;
-      $("#end-call-btn").hidden = false;
-
-      await subscribeToCall();
-
-      $("#call-status").textContent = `Calling ${activePerson.display_name || activePerson.username}...`;
+      appendChatMessage(data);
+      input.value = "";
+      $("#chat-file").value = "";
     } catch (error) {
-      console.error("Call start error:", error);
-      toast(error.message || "Unable to start call.");
-      await endCall(false);
+      console.error(error);
+      toast(error.message || "Unable to send message.");
+    } finally {
+      if (button) button.disabled = false;
     }
   }
 
-  function createPeerConnection() {
-    const connection = new RTCPeerConnection(rtcConfig);
+  function startFeedRealtime() {
+    if (feedChannel) db.removeChannel(feedChannel);
 
-    connection.onicecandidate = async (event) => {
-      if (!event.candidate || !callId || !activePerson) return;
-
-      const { error } = await supabase.from("call_signals").insert({
-        call_id: callId,
-        sender_id: currentUser.id,
-        recipient_id: activePerson.id,
-        kind: "ice",
-        payload: event.candidate.toJSON()
-      });
-
-      if (error) console.error("ICE signaling error:", error);
-    };
-
-    connection.ontrack = (event) => {
-      const stream = event.streams[0];
-
-      if (stream) {
-        $("#remote-video").srcObject = stream;
-      }
-
-      $("#call-status").textContent = "Connected";
-    };
-
-    connection.onconnectionstatechange = () => {
-      if (!pc) return;
-
-      if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
-        $("#call-status").textContent = `Connection ${pc.connectionState}`;
-      }
-    };
-
-    connection.onnegotiationneeded = async () => {
-      // Initial offer is created explicitly in startCall().
-    };
-
-    return connection;
-  }
-
-  async function subscribeToCall() {
-    if (!callId || !activePerson) return;
-
-    if (callChannel) {
-      await supabase.removeChannel(callChannel);
-    }
-
-    callChannel = supabase
-      .channel(`call:${callId}`)
+    feedChannel = db.channel("talkatch-feed")
       .on(
         "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "call_signals",
-          filter: `call_id=eq.${callId}`
-        },
-        async (payload) => {
-          await handleSignal(payload.new);
+        { event: "INSERT", schema: "public", table: "posts" },
+        () => {
+          if (!$("#view-home").hidden) loadFeed();
         }
       )
       .subscribe();
-  }
-
-  async function handleSignal(signal) {
-    if (!callId || signal.call_id !== callId) return;
-    if (signal.sender_id === currentUser.id) return;
-
-    if (signal.kind === "offer") {
-      if (callDirection === "outgoing") return;
-
-      pendingOffer = signal;
-      return;
-    }
-
-    if (signal.kind === "answer" && pc && callDirection === "outgoing") {
-      if (pc.signalingState !== "have-local-offer") return;
-
-      await pc.setRemoteDescription({
-        type: "answer",
-        sdp: signal.payload.sdp
-      });
-
-      for (const candidate of pendingIce) {
-        await pc.addIceCandidate(candidate);
-      }
-
-      pendingIce = [];
-      return;
-    }
-
-    if (signal.kind === "ice" && pc && signal.payload) {
-      const candidate = new RTCIceCandidate(signal.payload);
-
-      if (pc.remoteDescription) {
-        await pc.addIceCandidate(candidate);
-      } else {
-        pendingIce.push(candidate);
-      }
-
-      return;
-    }
-
-    if (signal.kind === "hangup") {
-      toast("The other person ended the call.");
-      await endCall(false);
-    }
-  }
-
-  async function acceptCall() {
-    if (!pendingOffer) {
-      toast("No incoming call is available.");
-      return;
-    }
-
-    const offerSignal = pendingOffer;
-    pendingOffer = null;
-
-    callId = offerSignal.call_id;
-    callMode = offerSignal.payload.mode || "audio";
-    callDirection = "incoming";
-    activePerson = people.find((p) => p.id === offerSignal.sender_id) || {
-      id: offerSignal.sender_id,
-      display_name: "Caller",
-      username: "caller"
-    };
-
-    try {
-      $("#incoming-call-actions").hidden = true;
-
-      localStream = await getLocalMedia(callMode);
-
-      $("#local-video").srcObject = localStream;
-      $("#local-video").hidden = callMode !== "video";
-
-      pc = createPeerConnection();
-
-      localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream);
-      });
-
-      await pc.setRemoteDescription({
-        type: "offer",
-        sdp: offerSignal.payload.sdp
-      });
-
-      for (const candidate of pendingIce) {
-        await pc.addIceCandidate(candidate);
-      }
-
-      pendingIce = [];
-
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      const { error } = await supabase.from("call_signals").insert({
-        call_id: callId,
-        sender_id: currentUser.id,
-        recipient_id: activePerson.id,
-        kind: "answer",
-        payload: { sdp: answer.sdp }
-      });
-
-      if (error) throw error;
-
-      await subscribeToCall();
-
-      $("#call-title").textContent =
-        `${callMode === "video" ? "Video" : "Voice"} call`;
-
-      $("#call-status").textContent = "Connecting...";
-      $("#end-call-btn").hidden = false;
-    } catch (error) {
-      console.error("Accept call error:", error);
-      toast(error.message || "Unable to accept call.");
-      await endCall(false);
-    }
-  }
-
-  async function declineCall() {
-    if (pendingOffer) {
-      const offer = pendingOffer;
-      pendingOffer = null;
-
-      await supabase.from("call_signals").insert({
-        call_id: offer.call_id,
-        sender_id: currentUser.id,
-        recipient_id: offer.sender_id,
-        kind: "hangup",
-        payload: { reason: "declined" }
-      });
-    }
-
-    await endCall(false);
-  }
-
-  async function endCall(notify = true) {
-    const previousCallId = callId;
-    const otherId = activePerson?.id;
-
-    if (notify && previousCallId && otherId && currentUser) {
-      await supabase.from("call_signals").insert({
-        call_id: previousCallId,
-        sender_id: currentUser.id,
-        recipient_id: otherId,
-        kind: "hangup",
-        payload: {}
-      }).catch(console.error);
-    }
-
-    if (callChannel) {
-      await supabase.removeChannel(callChannel);
-      callChannel = null;
-    }
-
-    if (pc) {
-      pc.ontrack = null;
-      pc.onicecandidate = null;
-      pc.close();
-      pc = null;
-    }
-
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-      localStream = null;
-    }
-
-    $("#local-video").srcObject = null;
-    $("#remote-video").srcObject = null;
-
-    $("#call-modal").hidden = true;
-    $("#incoming-call-actions").hidden = true;
-
-    callId = null;
-    callDirection = null;
-    pendingOffer = null;
-    pendingIce = [];
-
-    $("#mute-btn").innerHTML = '<i data-lucide="mic"></i>';
-    $("#camera-btn").innerHTML = '<i data-lucide="video"></i>';
-
-    refreshIcons();
-  }
-
-  async function watchIncomingCalls() {
-    if (callWatcher) {
-      await supabase.removeChannel(callWatcher);
-    }
-
-    callWatcher = supabase
-      .channel(`incoming-calls:${currentUser.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "call_signals",
-          filter: `recipient_id=eq.${currentUser.id}`
-        },
-        async (payload) => {
-          const signal = payload.new;
-
-          if (signal.kind !== "offer") {
-            if (signal.call_id === callId) await handleSignal(signal);
-            return;
-          }
-
-          if (callId) return;
-
-          pendingOffer = signal;
-          callId = signal.call_id;
-          callMode = signal.payload.mode || "audio";
-          callDirection = "incoming";
-
-          const caller = people.find((p) => p.id === signal.sender_id);
-
-          showCallModal(
-            `Incoming ${callMode === "video" ? "video" : "voice"} call`,
-            `${caller?.display_name || "Someone"} is calling you`
-          );
-
-          $("#incoming-call-actions").hidden = false;
-          $("#end-call-btn").hidden = true;
-
-          refreshIcons();
-        }
-      )
-      .subscribe();
-  }
-
-  async function toggleMute() {
-    if (!localStream) return;
-
-    const track = localStream.getAudioTracks()[0];
-    if (!track) return;
-
-    track.enabled = !track.enabled;
-
-    $("#mute-btn").title = track.enabled ? "Mute microphone" : "Unmute microphone";
-    toast(track.enabled ? "Microphone on" : "Microphone muted");
-  }
-
-  async function toggleCamera() {
-    if (!localStream) return;
-
-    const track = localStream.getVideoTracks()[0];
-    if (!track) {
-      toast("This is an audio-only call.");
-      return;
-    }
-
-    track.enabled = !track.enabled;
-
-    $("#camera-btn").title = track.enabled ? "Turn camera off" : "Turn camera on";
-    toast(track.enabled ? "Camera on" : "Camera off");
-  }
-
-  async function enterApp(user) {
-    currentUser = user;
-
-    showApp();
-
-    try {
-      await loadProfile();
-    } catch (error) {
-      console.error("Profile error:", error);
-      toast("Unable to load your profile. Check the profiles table and policies.");
-    }
-
-    await loadPeople();
-    await watchIncomingCalls();
   }
 
   async function logout() {
-    await endCall(false);
+    if (chatChannel) await db.removeChannel(chatChannel);
+    if (feedChannel) await db.removeChannel(feedChannel);
 
-    if (activeChannel) await supabase.removeChannel(activeChannel);
-    if (callWatcher) await supabase.removeChannel(callWatcher);
+    await db.auth.signOut();
 
-    activeChannel = null;
-    callWatcher = null;
-    activePerson = null;
-    currentProfile = null;
-    currentUser = null;
-
-    const { error } = await supabase.auth.signOut();
-
-    if (error) toast(error.message);
+    user = null;
+    profile = null;
+    profiles = [];
+    selectedChat = null;
+    chatChannel = null;
+    feedChannel = null;
 
     showAuth();
+    setAuthMode("login");
   }
 
   function bindEvents() {
-    $("#login-tab").addEventListener("click", () => setAuthTab("login"));
-    $("#signup-tab").addEventListener("click", () => setAuthTab("signup"));
+    $("#login-tab").addEventListener("click", () => setAuthMode("login"));
+    $("#signup-tab").addEventListener("click", () => setAuthMode("signup"));
 
-    $("#loginForm").addEventListener("submit", async (event) => {
+    $("#loginForm").addEventListener("submit", async event => {
       event.preventDefault();
 
       const form = new FormData(event.currentTarget);
-      const email = String(form.get("email") || "").trim();
-      const password = String(form.get("password") || "");
-
-      const button = event.currentTarget.querySelector("button[type=submit]");
-      button.disabled = true;
 
       try {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password
+        const { data, error } = await db.auth.signInWithPassword({
+          email: String(form.get("email")).trim(),
+          password: String(form.get("password"))
         });
 
         if (error) throw error;
 
         await enterApp(data.user);
       } catch (error) {
-        setAuthMessage(error.message || "Unable to log in.");
-      } finally {
-        button.disabled = false;
+        setMessage(error.message || "Unable to log in.");
       }
     });
 
-    $("#signupForm").addEventListener("submit", async (event) => {
+    $("#signupForm").addEventListener("submit", async event => {
       event.preventDefault();
 
       const form = new FormData(event.currentTarget);
 
-      const display_name = String(form.get("display_name") || "").trim();
-      const username = String(form.get("username") || "").trim();
-      const email = String(form.get("email") || "").trim();
-      const password = String(form.get("password") || "");
+      const displayName = String(form.get("display_name")).trim();
+      const username = String(form.get("username")).trim();
+      const email = String(form.get("email")).trim();
+      const password = String(form.get("password"));
 
       if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
-        setAuthMessage("Username must contain 3–24 letters, numbers, or underscores.");
+        setMessage("Username must be 3–24 letters, numbers, or underscores.");
         return;
       }
 
       try {
-        const { data, error } = await supabase.auth.signUp({
+        const { data, error } = await db.auth.signUp({
           email,
           password,
           options: {
-            data: { display_name, username },
-            emailRedirectTo: window.location.origin
+            data: { display_name: displayName, username },
+            emailRedirectTo: location.origin
           }
         });
 
@@ -1034,77 +1273,118 @@
         if (data.session && data.user) {
           await enterApp(data.user);
         } else {
-          setAuthMessage("Account created. Check your email and confirm your address before logging in.");
+          setMessage("Registration submitted. Check your email and confirm your account before logging in.");
         }
       } catch (error) {
-        setAuthMessage(error.message || "Unable to create your account.");
+        setMessage(error.message || "Unable to create your account.");
       }
     });
 
-    $("#messageForm").addEventListener("submit", onMessageSubmit);
-    $("#file-input").addEventListener("change", onFileSelected);
+    $("#forgot-password").addEventListener("click", async () => {
+      const email = $("#login-email").value.trim();
 
-    $("#user-search").addEventListener("input", renderPeople);
+      if (!email) {
+        setMessage("Enter your email address first.");
+        return;
+      }
 
-    $("#logout-btn").addEventListener("click", logout);
+      const { error } = await db.auth.resetPasswordForEmail(email, {
+        redirectTo: location.origin
+      });
 
-    $("#theme-toggle").addEventListener("click", () => {
-      document.body.classList.toggle("dark");
-
-      localStorage.setItem(
-        "talkatch-theme",
-        document.body.classList.contains("dark") ? "dark" : "light"
-      );
+      setMessage(error ? error.message : "If the account exists, a password reset email will be sent.");
     });
 
-    $("#my-account").addEventListener("click", () => {
-      $("#profile-modal").hidden = false;
-      refreshIcons();
+    $("#publish-post").addEventListener("click", publishPost);
+
+    $("#post-image").addEventListener("change", event => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      if (file.size > MAX_IMAGE_SIZE) {
+        toast("Images must be 5 MB or smaller.");
+        event.target.value = "";
+        return;
+      }
+
+      pendingPostFile = file;
+      $("#preview-image").src = URL.createObjectURL(file);
+      $("#post-image-preview").hidden = false;
     });
 
-    $("#close-profile-btn").addEventListener("click", () => {
-      $("#profile-modal").hidden = true;
+    $("#remove-post-image").addEventListener("click", () => {
+      pendingPostFile = null;
+      $("#post-image").value = "";
+      $("#post-image-preview").hidden = true;
+    });
+
+    $("#refresh-feed").addEventListener("click", loadFeed);
+    $("#refresh-notifications").addEventListener("click", loadNotifications);
+    $("#refresh-suggestions").addEventListener("click", loadPeople);
+
+    $("#explore-search").addEventListener("input", renderExplore);
+    $("#message-user-search").addEventListener("input", renderMessagePeople);
+
+    $("#chat-form").addEventListener("submit", sendChatMessage);
+
+    $("#chat-file").addEventListener("change", event => {
+      const file = event.target.files?.[0];
+      if (file) toast(`Selected attachment: ${file.name}. Press Send to upload it.`);
     });
 
     $("#profileForm").addEventListener("submit", saveProfile);
 
-    $("#profile-avatar-file").addEventListener("change", (event) => {
+    $("#profile-avatar-file").addEventListener("change", event => {
       const file = event.target.files?.[0];
       if (!file) return;
 
+      pendingAvatarFile = file;
       $("#profile-avatar-preview").src = URL.createObjectURL(file);
     });
 
-    $("#voice-call-btn").addEventListener("click", () => startCall("audio"));
-    $("#video-call-btn").addEventListener("click", () => startCall("video"));
+    $("#open-profile").addEventListener("click", () => {
+      $("#profile-modal").hidden = false;
+      icons();
+    });
 
-    $("#accept-call-btn").addEventListener("click", acceptCall);
-    $("#decline-call-btn").addEventListener("click", declineCall);
+    $("#close-profile").addEventListener("click", () => {
+      $("#profile-modal").hidden = true;
+    });
 
-    $("#end-call-btn").addEventListener("click", () => endCall(true));
-    $("#mute-btn").addEventListener("click", toggleMute);
-    $("#camera-btn").addEventListener("click", toggleCamera);
+    $("#logout-btn").addEventListener("click", logout);
 
-    $("#back-to-people").addEventListener("click", () => {
-      document.body.classList.remove("chat-open");
+    const toggleTheme = () => {
+      const dark = document.body.classList.toggle("dark");
+      localStorage.setItem("talkatch-theme", dark ? "dark" : "light");
+      icons();
+    };
+
+    $("#theme-toggle").addEventListener("click", toggleTheme);
+    $("#mobile-theme-toggle").addEventListener("click", toggleTheme);
+
+    $$("[data-view]").forEach(button => {
+      button.addEventListener("click", () => switchView(button.dataset.view));
     });
   }
 
   async function init() {
-    if (!config.supabaseUrl || !config.supabasePublishableKey ||
-        config.supabasePublishableKey.includes("PASTE_YOUR")) {
-      showAuth();
-      setAuthMessage("Set your Supabase URL and public key in config.js.");
-      return;
-    }
-
     if (!window.supabase) {
       showAuth();
-      setAuthMessage("Unable to load Supabase. Check your internet connection.");
+      setMessage("Supabase failed to load. Check your internet connection.");
       return;
     }
 
-    supabase = window.supabase.createClient(
+    if (
+      !config.supabaseUrl ||
+      !config.supabasePublishableKey ||
+      config.supabasePublishableKey.includes("PASTE_YOUR")
+    ) {
+      showAuth();
+      setMessage("Add your Supabase URL and public key to config.js.");
+      return;
+    }
+
+    db = window.supabase.createClient(
       config.supabaseUrl,
       config.supabasePublishableKey
     );
@@ -1115,9 +1395,9 @@
       document.body.classList.add("dark");
     }
 
-    const { data, error } = await supabase.auth.getSession();
+    const { data, error } = await db.auth.getSession();
 
-    if (error) console.error("Session error:", error);
+    if (error) console.error("Session check failed:", error);
 
     if (data?.session?.user) {
       await enterApp(data.session.user);
@@ -1125,14 +1405,11 @@
       showAuth();
     }
 
-    supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT") {
-        currentUser = null;
-        showAuth();
-      }
+    db.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") showAuth();
     });
 
-    refreshIcons();
+    icons();
   }
 
   document.addEventListener("DOMContentLoaded", init);
