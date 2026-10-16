@@ -1,191 +1,247 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#111827">
-  <meta name="description" content="TALKATCH — connect, share, and chat.">
-  <title>TALKATCH — Your community</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TALKATCH — Connect & Chat</title>
+
   <link rel="stylesheet" href="css/style.css">
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
-  <script src="config/config.js"></script>
+  <script src="config/config.js" defer></script>
   <script src="js/app.js" defer></script>
 </head>
-<body data-theme="dark">
-  <header class="topbar">
-    <a class="brand" href="#" aria-label="TALKATCH home">
-      <span class="brand-icon">T</span>
-      <span>TALKATCH<span class="brand-dot">.</span></span>
-    </a>
-    <div class="top-actions">
-      <span id="user-label" class="muted">Welcome</span>
-      <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle theme">◐</button>
-      <button id="logout-btn" class="btn btn-outline hidden" type="button">Log out</button>
+
+<body>
+  <div id="toast" class="toast"></div>
+
+  <!-- AUTHENTICATION -->
+  <section id="auth-screen" class="auth-screen">
+    <div class="auth-card">
+      <div class="brand brand-large">
+        <div class="brand-logo">T</div>
+        <span>TALKATCH</span>
+      </div>
+
+      <p class="muted">Connect with people. Talk freely.</p>
+
+      <div class="auth-tabs">
+        <button id="login-tab" class="active" type="button">Login</button>
+        <button id="signup-tab" type="button">Create account</button>
+      </div>
+
+      <form id="loginForm">
+        <label>Email</label>
+        <input name="email" type="email" placeholder="you@example.com"
+               autocomplete="email" required>
+
+        <label>Password</label>
+        <input name="password" type="password" placeholder="Your password"
+               autocomplete="current-password" required>
+
+        <button class="primary-btn full-width" type="submit">Login</button>
+      </form>
+
+      <form id="signupForm" hidden>
+        <label>Display name</label>
+        <input name="display_name" type="text" maxlength="50"
+               placeholder="Your name" required>
+
+        <label>Username</label>
+        <input name="username" type="text" minlength="3" maxlength="24"
+               pattern="[A-Za-z0-9_]+" placeholder="your_username" required>
+
+        <label>Email</label>
+        <input name="email" type="email" placeholder="you@example.com"
+               autocomplete="email" required>
+
+        <label>Password</label>
+        <input name="password" type="password" minlength="8"
+               placeholder="At least 8 characters"
+               autocomplete="new-password" required>
+
+        <button class="primary-btn full-width" type="submit">
+          Create account
+        </button>
+      </form>
+
+      <p id="auth-message" class="auth-message"></p>
+      <p class="muted small">By continuing, you agree to use TALKATCH responsibly.</p>
     </div>
-  </header>
+  </section>
 
-  <main class="page">
-    <section id="auth-view" class="auth-layout">
-      <div class="hero">
-        <span class="eyebrow">YOUR SPACE TO CONNECT</span>
-        <h1>Real people.<br><span>Real conversations.</span></h1>
-        <p>Meet people, send messages, share pictures, and talk face to face.</p>
-        <div class="feature-pills">
-          <span>Private messaging</span><span>Picture sharing</span>
-          <span>Voice & video</span>
-        </div>
+  <!-- MAIN APPLICATION -->
+  <div id="app-screen" class="app-shell" hidden>
+
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">T</div>
+        <span>TALKATCH</span>
       </div>
 
-      <div class="panel auth-card">
-        <div class="auth-tabs">
-          <button class="auth-tab active" data-auth-tab="login" type="button">Log in</button>
-          <button class="auth-tab" data-auth-tab="signup" type="button">Create account</button>
-        </div>
-        <form id="login-form">
-          <h2>Welcome back</h2>
-          <label for="login-email">Email</label>
-          <input id="login-email" type="email" autocomplete="email" required>
-          <label for="login-password">Password</label>
-          <input id="login-password" type="password" autocomplete="current-password" required>
-          <button class="btn btn-primary full" type="submit">Log in</button>
-        </form>
-        <form id="signup-form" class="hidden">
-          <h2>Join TALKATCH</h2>
-          <label for="signup-name">Display name</label>
-          <input id="signup-name" maxlength="40" required>
-          <label for="signup-username">Username</label>
-          <input id="signup-username" pattern="[A-Za-z0-9_]+" minlength="3" maxlength="24" required>
-          <label for="signup-email">Email</label>
-          <input id="signup-email" type="email" autocomplete="email" required>
-          <label for="signup-password">Password (at least 8 characters)</label>
-          <input id="signup-password" type="password" minlength="8" autocomplete="new-password" required>
-          <button class="btn btn-primary full" type="submit">Create account</button>
-          <p class="muted small">Email confirmation may be required.</p>
-        </form>
-        <button id="forgot-password" class="text-btn" type="button">Forgot password?</button>
-        <p id="auth-status" class="status" role="status"></p>
+      <button id="my-account" class="my-account">
+        <img id="my-avatar" src="" alt="Your profile">
+        <span>
+          <strong id="my-name">My account</strong>
+          <small id="my-username">@username</small>
+        </span>
+      </button>
+
+      <div class="sidebar-label">MESSAGES</div>
+
+      <div class="search-box">
+        <i data-lucide="search"></i>
+        <input id="user-search" type="search" placeholder="Find people">
       </div>
-    </section>
 
-    <section id="app-view" class="dashboard hidden">
-      <aside class="sidebar panel">
-        <div class="side-profile">
-          <div id="my-avatar" class="avatar">T</div>
-          <div class="truncate">
-            <strong id="my-name">Your profile</strong>
-            <p id="my-username" class="muted small">@username</p>
+      <div id="people-list" class="people-list"></div>
+
+      <div class="sidebar-bottom">
+        <button id="theme-toggle" class="secondary-btn">
+          <i data-lucide="moon"></i> Toggle theme
+        </button>
+
+        <button id="logout-btn" class="secondary-btn">
+          <i data-lucide="log-out"></i> Log out
+        </button>
+      </div>
+    </aside>
+
+    <main class="chat-area">
+
+      <header class="chat-header">
+        <button id="back-to-people" class="icon-btn mobile-only"
+                aria-label="Back to people">
+          <i data-lucide="arrow-left"></i>
+        </button>
+
+        <div class="chat-person">
+          <img id="chat-avatar" src="" alt="">
+          <div>
+            <h2 id="chat-name">Welcome to TALKATCH</h2>
+            <p id="chat-status">Select someone to start chatting</p>
           </div>
         </div>
-        <nav class="nav-list">
-          <button class="nav-item active" data-view="home">▦ <span>Overview</span></button>
-          <button class="nav-item" data-view="people">♙ <span>People</span></button>
-          <button class="nav-item" data-view="messages">☏ <span>Messages</span></button>
-          <button class="nav-item hidden" id="admin-nav" data-view="admin">⚙ <span>Admin panel</span></button>
-        </nav>
-        <div class="sidebar-note">✦ Connect with kindness.</div>
-      </aside>
 
-      <section class="main-column">
-        <section id="view-home" class="view">
-          <div class="page-heading">
-            <div><p class="eyebrow">YOUR COMMUNITY</p><h1>Welcome to TALKATCH</h1>
-              <p class="muted">Your space for conversations and connections.</p>
-            </div>
-          </div>
-          <div class="stats-grid">
-            <article class="panel stat"><span class="muted">Your account</span><strong id="stat-account">Member</strong><small>Signed in securely</small></article>
-            <article class="panel stat"><span class="muted">Messaging</span><strong>Ready to connect</strong><small>Choose someone to chat with</small></article>
-            <article class="panel stat"><span class="muted">Calls</span><strong>Voice + video</strong><small>Allow microphone/camera access</small></article>
-          </div>
-          <div class="panel welcome-panel">
-            <span class="eyebrow">GET STARTED</span>
-            <h2>Make your next connection.</h2>
-            <p class="muted">Find a member, start a private conversation, or call someone directly.</p>
-            <button class="btn btn-primary" data-go="people" type="button">Find people</button>
-          </div>
-          <div class="panel safety-panel">
-            <h3>Stay safe</h3>
-            <p class="muted">Never share passwords, financial information, or your home address with strangers. Report abusive behavior to the administrators.</p>
-          </div>
-        </section>
+        <div class="chat-actions">
+          <button id="voice-call-btn" class="icon-btn" title="Voice call"
+                  aria-label="Voice call" disabled>
+            <i data-lucide="phone"></i>
+          </button>
 
-        <section id="view-people" class="view hidden">
-          <div class="page-heading"><div><p class="eyebrow">COMMUNITY</p><h1>Find people</h1><p class="muted">Start a private conversation with another member.</p></div></div>
-          <input id="people-search" placeholder="Search usernames and display names…" aria-label="Search people">
-          <div id="people-list" class="people-list"><div class="panel">Loading members…</div></div>
-        </section>
+          <button id="video-call-btn" class="icon-btn" title="Video call"
+                  aria-label="Video call" disabled>
+            <i data-lucide="video"></i>
+          </button>
+        </div>
+      </header>
 
-        <section id="view-messages" class="view hidden">
-          <div class="page-heading"><div><p class="eyebrow">PRIVATE CHAT</p><h1>Messages</h1><p class="muted">Only conversation members can access private chats.</p></div></div>
-          <div class="chat-layout panel">
-            <aside class="chat-contacts">
-              <h3>People</h3>
-              <input id="chat-search" placeholder="Find someone…" aria-label="Find a chat contact">
-              <div id="chat-contacts-list"></div>
-            </aside>
-            <section class="chat-main">
-              <div class="chat-heading">
-                <div><strong id="chat-title">Choose someone</strong><p id="chat-subtitle" class="muted small">Your private conversation</p></div>
-                <div class="call-actions">
-                  <button id="voice-call" class="icon-btn" type="button" title="Voice call" disabled>☎</button>
-                  <button id="video-call" class="icon-btn" type="button" title="Video call" disabled>▣</button>
-                  <button id="end-call" class="icon-btn hidden" type="button" title="End call">■</button>
-                </div>
-              </div>
-              <div id="call-banner" class="call-banner hidden">
-                <span id="call-banner-text">Incoming call</span>
-                <button id="accept-call" class="btn btn-primary" type="button">Accept</button>
-                <button id="decline-call" class="btn btn-outline" type="button">Decline</button>
-              </div>
-              <div id="video-stage" class="video-stage hidden">
-                <video id="remote-video" autoplay playsinline></video>
-                <video id="local-video" autoplay muted playsinline></video>
-              </div>
-              <div id="chat-messages" class="chat-messages">
-                <div class="empty-chat"><span>✉</span><h3>Your conversations</h3><p class="muted">Select a person to start chatting.</p></div>
-              </div>
-              <form id="message-form" class="message-form">
-                <div id="image-preview" class="image-preview hidden"></div>
-                <div class="message-tools">
-                  <label class="attach-btn" for="message-image" title="Attach a picture">＋ Photo</label>
-                  <input id="message-image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
-                  <textarea id="message-input" rows="1" maxlength="5000" placeholder="Write a message…" aria-label="Message" disabled></textarea>
-                  <button class="btn btn-primary" type="submit" id="send-message" disabled>Send ↗</button>
-                </div>
-                <p id="chat-status" class="muted small"></p>
-              </form>
-            </section>
-          </div>
-        </section>
+      <div id="empty-chat" class="empty-chat">
+        <div class="empty-icon">
+          <i data-lucide="messages-square"></i>
+        </div>
+        <h2>Your conversations, all in one place</h2>
+        <p>Choose a person from the sidebar to start a private conversation.</p>
+      </div>
 
-        <section id="view-admin" class="view hidden">
-          <div class="page-heading"><div><p class="eyebrow">MANAGEMENT</p><h1>Admin dashboard</h1><p class="muted">Review reports and manage member access.</p></div></div>
-          <div class="stats-grid">
-            <article class="panel stat"><span class="muted">Members</span><strong id="admin-member-count">—</strong></article>
-            <article class="panel stat"><span class="muted">Open reports</span><strong id="admin-report-count">—</strong></article>
-          </div>
-          <div class="panel admin-section">
-            <h2>Member management</h2>
-            <input id="admin-user-search" placeholder="Search members…">
-            <div id="admin-users-list"></div>
-          </div>
-          <div class="panel admin-section">
-            <h2>Reports</h2>
-            <div id="admin-reports-list"></div>
-          </div>
-        </section>
+      <section id="conversation" class="conversation" hidden>
+        <div id="messages-list" class="messages-list"></div>
+
+        <div id="typing-indicator" class="typing-indicator"></div>
+
+        <form id="messageForm" class="message-composer">
+          <label class="attach-btn" title="Attach a file">
+            <i data-lucide="paperclip"></i>
+            <input id="file-input" type="file" hidden>
+          </label>
+
+          <input id="message-input" type="text" maxlength="5000"
+                 placeholder="Write a message..." autocomplete="off">
+
+          <button class="send-btn" type="submit" aria-label="Send message">
+            <i data-lucide="send"></i>
+          </button>
+        </form>
+
+        <p id="attachment-status" class="attachment-status"></p>
       </section>
+    </main>
+  </div>
 
-      <aside class="rightbar">
-        <div class="panel side-card"><p class="eyebrow">TALKATCH TIP</p><h3>Be yourself.</h3><p class="muted">Good conversations begin with respect.</p></div>
-        <div class="panel side-card"><p class="eyebrow">QUICK ACTIONS</p><button class="quick-link" data-go="people" type="button">＋ Find members</button><button class="quick-link" data-go="messages" type="button">✉ Open messages</button></div>
-      </aside>
-    </section>
-  </main>
+  <!-- CALL WINDOW -->
+  <div id="call-modal" class="call-modal" hidden>
+    <div class="call-card">
+      <div class="call-heading">
+        <h2 id="call-title">Call</h2>
+        <p id="call-status">Connecting...</p>
+      </div>
 
-  <div id="toast" class="toast hidden" role="status"></div>
-  <footer class="footer">© <span id="year"></span> TALKATCH. Connect with kindness.</footer>
+      <div id="incoming-call-actions" class="incoming-call-actions" hidden>
+        <button id="accept-call-btn" class="primary-btn">
+          Accept call
+        </button>
+        <button id="decline-call-btn" class="danger-btn">
+          Decline
+        </button>
+      </div>
+
+      <div id="video-container" class="video-container">
+        <video id="remote-video" autoplay playsinline></video>
+        <video id="local-video" autoplay muted playsinline></video>
+      </div>
+
+      <div class="call-controls">
+        <button id="mute-btn" class="icon-btn" title="Mute microphone">
+          <i data-lucide="mic"></i>
+        </button>
+
+        <button id="camera-btn" class="icon-btn" title="Toggle camera">
+          <i data-lucide="video"></i>
+        </button>
+
+        <button id="end-call-btn" class="danger-btn">
+          <i data-lucide="phone-off"></i> End call
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROFILE EDITOR -->
+  <div id="profile-modal" class="modal" hidden>
+    <form id="profileForm" class="modal-card">
+      <div class="modal-heading">
+        <h2>Edit profile</h2>
+        <button id="close-profile-btn" class="icon-btn" type="button"
+                aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+
+      <img id="profile-avatar-preview" class="profile-preview"
+           src="" alt="Profile preview">
+
+      <label>Profile picture</label>
+      <input id="profile-avatar-file" type="file"
+             accept="image/png,image/jpeg,image/webp">
+
+      <label>Display name</label>
+      <input id="profile-display-name" name="display_name"
+             maxlength="50" required>
+
+      <label>Username</label>
+      <input id="profile-username" name="username"
+             minlength="3" maxlength="24"
+             pattern="[A-Za-z0-9_]+" required>
+
+      <label>About me</label>
+      <textarea id="profile-bio" name="bio"
+                maxlength="300" rows="3"></textarea>
+
+      <button class="primary-btn full-width" type="submit">
+        Save profile
+      </button>
+    </form>
+  </div>
 </body>
 </html>
