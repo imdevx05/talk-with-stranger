@@ -1,939 +1,1139 @@
-
 (() => {
   "use strict";
 
-  const $ = id => document.getElementById(id);
-  const config = window.TALKATCH_CONFIG;
+  const config = window.TALKATCH_CONFIG || {};
+  const $ = (selector) => document.querySelector(selector);
 
-  if (!config || !window.supabase) {
-    console.error("TALKATCH config or Supabase library is missing.");
-    return;
+  let supabase;
+  let currentUser = null;
+  let currentProfile = null;
+  let activePerson = null;
+  let activeChannel = null;
+  let messagesChannel = null;
+  let people = [];
+  let toastTimer;
+  let pc = null;
+  let localStream = null;
+  let callId = null;
+  let callMode = "audio";
+  let callDirection = null;
+  let pendingOffer = null;
+  let pendingIce = [];
+  let callChannel = null;
+  let callWatcher = null;
+  let makingOffer = false;
+
+  const MAX_FILE_SIZE = 15 * 1024 * 1024;
+  const FILE_BUCKET = "chat-files";
+  const AVATAR_BUCKET = "avatars";
+
+  const rtcConfig = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" }
+    ]
+  };
+
+  function toast(message) {
+    const el = $("#toast");
+    if (!el) return;
+
+    el.textContent = message;
+    el.classList.add("show");
+
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("show"), 3500);
   }
 
-  const db = window.supabase.createClient(
-    config.supabaseUrl,
-    config.supabasePublishableKey
-  );
-
-  const state = {
-    user: null,
-    profile: null,
-    people: [],
-    selected: null,
-    conversationId: null,
-    messageChannel: null,
-    signalChannel: null,
-    incomingOffer: null,
-    pc: null,
-    stream: null,
-    pendingIce: [],
-    seenSignals: new Set(),
-    videoCall: false,
-    pendingImage: null,
-    toastTimer: null
-  };
-
-  const escapeHtml = value => String(value ?? "").replace(
-    /[&<>"']/g,
-    char => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;",
-      '"': "&quot;", "'": "&#39;"
-    })[char]
-  );
-
-  const initials = value => {
-    const words = String(value || "T").trim().split(/\s+/);
-    return words.slice(0, 2).map(word => word[0] || "").join("").toUpperCase();
-  };
-
-  const message = (id, text, isError = false) => {
-    const element = $(id);
-    if (!element) return;
-    element.textContent = text || "";
-    element.style.color = isError ? "var(--danger)" : "var(--muted)";
-  };
-
-  function toast(text) {
-    const box = $("toast");
-    box.textContent = text;
-    box.classList.remove("hidden");
-    clearTimeout(state.toastTimer);
-    state.toastTimer = setTimeout(() => box.classList.add("hidden"), 3500);
+  function escapeHTML(value = "") {
+    return String(value).replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[char]);
   }
 
-  function avatarMarkup(profile) {
-    const name = profile?.display_name || profile?.username || "Member";
-    if (profile?.avatar_url) {
-      return `<img class="avatar" src="${escapeHtml(profile.avatar_url)}" alt="">`;
+  function avatarURL(profile) {
+    if (profile && profile.avatar_url) return profile.avatar_url;
+
+    const name = encodeURIComponent(
+      (profile && (profile.display_name || profile.username)) || "User"
+    );
+
+    return `https://ui-avatars.com/api/?name=${name}&background=6658e8&color=fff`;
+  }
+
+  function refreshIcons() {
+    try {
+      if (window.lucide) window.lucide.createIcons();
+    } catch (error) {
+      console.warn("Icon rendering error:", error);
     }
-    return `<div class="avatar">${escapeHtml(initials(name))}</div>`;
   }
 
-  function setView(name) {
-    document.querySelectorAll(".view").forEach(view => view.classList.add("hidden"));
-    const view = $("view-" + name);
-    if (view) view.classList.remove("hidden");
+  function setAuthMessage(message) {
+    const el = $("#auth-message");
+    if (el) el.textContent = message;
+  }
 
-    document.querySelectorAll(".nav-item[data-view]").forEach(button => {
-      button.classList.toggle("active", button.dataset.view === name);
+  function showAuth() {
+    if ($("#auth-screen")) $("#auth-screen").hidden = false;
+    if ($("#app-screen")) $("#app-screen").hidden = true;
+
+    document.body.classList.remove("chat-open");
+  }
+
+  function showApp() {
+    if ($("#auth-screen")) $("#auth-screen").hidden = true;
+    if ($("#app-screen")) $("#app-screen").hidden = false;
+
+    refreshIcons();
+  }
+
+  function setAuthTab(tab) {
+    const login = tab === "login";
+
+    if ($("#loginForm")) $("#loginForm").hidden = !login;
+    if ($("#signupForm")) $("#signupForm").hidden = login;
+
+    $("#login-tab")?.classList.toggle("active", login);
+    $("#signup-tab")?.classList.toggle("active", !login);
+
+    setAuthMessage("");
+  }
+
+  function showConversation(person) {
+    activePerson = person;
+
+    $("#empty-chat").hidden = true;
+    $("#conversation").hidden = false;
+
+    $("#chat-name").textContent =
+      person.display_name || person.username || "Conversation";
+
+    $("#chat-status").textContent =
+      person.bio || `@${person.username || "user"}`;
+
+    $("#chat-avatar").src = avatarURL(person);
+
+    $("#voice-call-btn").disabled = false;
+    $("#video-call-btn").disabled = false;
+
+    document.body.classList.add("chat-open");
+
+    $$(".person").forEach((button) => {
+      button.classList.toggle(
+        "active",
+        button.dataset.id === person.id
+      );
     });
-
-    if (name === "people") loadPeople();
-    if (name === "messages") loadPeople();
-    if (name === "admin") loadAdmin();
   }
 
-  function setAuthMode(mode) {
-    $("login-form").classList.toggle("hidden", mode !== "login");
-    $("signup-form").classList.toggle("hidden", mode !== "signup");
-
-    document.querySelectorAll("[data-auth-tab]").forEach(button => {
-      button.classList.toggle("active", button.dataset.authTab === mode);
-    });
-
-    message("auth-status", "");
+  function $$(selector) {
+    return [...document.querySelectorAll(selector)];
   }
 
-  async function loadProfile() {
-    const { data, error } = await db.from("profiles")
-      .select("id,username,display_name,avatar_url,role,is_suspended")
-      .eq("id", state.user.id)
+  async function getProfile(userId) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
       .maybeSingle();
 
     if (error) throw error;
 
-    if (!data) {
-      const username = (state.user.email || "member")
-        .split("@")[0].replace(/[^A-Za-z0-9_]/g, "").slice(0, 24) || "member";
+    if (data) return data;
 
-      const { data: created, error: createError } = await db
-        .from("profiles")
-        .insert({
-          id: state.user.id,
-          username: username + "_" + state.user.id.slice(0, 5),
-          display_name: username
-        })
-        .select("id,username,display_name,avatar_url,role,is_suspended")
-        .single();
+    const metadata = currentUser?.user_metadata || {};
 
-      if (createError) throw createError;
-      state.profile = created;
-    } else {
-      state.profile = data;
-    }
+    const fallback = {
+      id: userId,
+      username: metadata.username || `user_${userId.slice(0, 8)}`,
+      display_name: metadata.display_name || "New user",
+      bio: "",
+      avatar_url: null
+    };
 
-    if (state.profile.is_suspended) {
-      await db.auth.signOut();
-      throw new Error("This account has been suspended. Contact the administrator.");
-    }
+    const { data: inserted, error: insertError } = await supabase
+      .from("profiles")
+      .upsert(fallback, { onConflict: "id" })
+      .select()
+      .single();
 
-    $("my-name").textContent = state.profile.display_name || state.profile.username;
-    $("my-username").textContent = "@" + state.profile.username;
-    $("my-avatar").textContent = initials(state.profile.display_name || state.profile.username);
-    $("user-label").textContent = state.profile.display_name || state.profile.username;
-    $("stat-account").textContent = state.profile.role === "admin" ? "Administrator" : "Member";
-    $("admin-nav").classList.toggle("hidden", state.profile.role !== "admin");
+    if (insertError) throw insertError;
 
-    if (state.profile.avatar_url) {
-      $("my-avatar").innerHTML = "";
-      $("my-avatar").style.backgroundImage = `url("${state.profile.avatar_url}")`;
-      $("my-avatar").style.backgroundSize = "cover";
-      $("my-avatar").textContent = "";
-    }
+    return inserted;
   }
 
-  async function showApp() {
-    $("auth-view").classList.add("hidden");
-    $("app-view").classList.remove("hidden");
-    $("logout-btn").classList.remove("hidden");
-    await loadProfile();
-    await loadPeople();
-    await subscribeIncomingCalls();
-  }
+  async function loadProfile() {
+    currentProfile = await getProfile(currentUser.id);
 
-  function showAuth() {
-    $("auth-view").classList.remove("hidden");
-    $("app-view").classList.add("hidden");
-    $("logout-btn").classList.add("hidden");
-    state.user = null;
-    state.profile = null;
-    closeConversation();
-    endCall(false);
-  }
+    $("#my-name").textContent =
+      currentProfile.display_name || currentProfile.username;
 
-  async function authLogin(event) {
-    event.preventDefault();
-    const email = $("login-email").value.trim();
-    const password = $("login-password").value;
-    message("auth-status", "Signing in…");
+    $("#my-username").textContent = `@${currentProfile.username}`;
 
-    const { data, error } = await db.auth.signInWithPassword({ email, password });
-    if (error) return message("auth-status", error.message, true);
-
-    state.user = data.user;
-    try {
-      await showApp();
-      setView("home");
-      message("auth-status", "");
-    } catch (err) {
-      message("auth-status", err.message, true);
-    }
-  }
-
-  async function authSignup(event) {
-    event.preventDefault();
-    const display_name = $("signup-name").value.trim();
-    const username = $("signup-username").value.trim();
-    const email = $("signup-email").value.trim();
-    const password = $("signup-password").value;
-
-    if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
-      return message("auth-status", "Use 3–24 letters, numbers, or underscores.", true);
-    }
-
-    message("auth-status", "Creating account…");
-
-    const { data, error } = await db.auth.signUp({
-      email, password,
-      options: { data: { display_name, username } }
-    });
-
-    if (error) return message("auth-status", error.message, true);
-
-    if (!data.session) {
-      return message("auth-status", "Account created. Confirm your email, then log in.");
-    }
-
-    state.user = data.user;
-    try {
-      await showApp();
-      setView("home");
-      toast("Welcome to TALKATCH!");
-    } catch (err) {
-      message("auth-status", err.message, true);
-    }
+    $("#my-avatar").src = avatarURL(currentProfile);
+    $("#profile-avatar-preview").src = avatarURL(currentProfile);
+    $("#profile-display-name").value = currentProfile.display_name || "";
+    $("#profile-username").value = currentProfile.username || "";
+    $("#profile-bio").value = currentProfile.bio || "";
   }
 
   async function loadPeople() {
-    if (!state.user) return;
+    const list = $("#people-list");
+    if (!list) return;
 
-    const search = ($("people-search")?.value || $("chat-search")?.value || "")
-      .trim().replace(/[%,()]/g, "");
-
-    let query = db.from("profiles")
-      .select("id,username,display_name,avatar_url,role")
-      .neq("id", state.user.id)
-      .eq("is_suspended", false)
-      .order("username")
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, username, display_name, bio, avatar_url")
+      .neq("id", currentUser.id)
+      .order("display_name")
       .limit(100);
 
-    if (search) {
-      query = query.or(
-        `username.ilike.%${search}%,display_name.ilike.%${search}%`
-      );
-    }
-
-    const { data, error } = await query;
     if (error) {
-      if ($("people-list")) $("people-list").innerHTML =
-        `<div class="panel welcome-panel">Could not load people: ${escapeHtml(error.message)}</div>`;
+      console.error("Unable to load users:", error);
+      list.textContent = "Unable to load users. Check database policies.";
       return;
     }
 
-    state.people = data || [];
+    people = data || [];
     renderPeople();
-    renderContacts();
   }
 
   function renderPeople() {
-    const container = $("people-list");
-    if (!container) return;
+    const list = $("#people-list");
+    if (!list) return;
 
-    if (!state.people.length) {
-      container.innerHTML = '<div class="panel welcome-panel">No members found.</div>';
-      return;
-    }
+    const search = ($("#user-search")?.value || "")
+      .trim()
+      .toLowerCase();
 
-    container.innerHTML = state.people.map(person => `
-      <article class="panel person-card">
-        ${avatarMarkup(person)}
-        <div class="person-details">
-          <strong>${escapeHtml(person.display_name || person.username)}</strong>
-          <p class="muted small">@${escapeHtml(person.username)}</p>
-        </div>
-        <div class="person-actions">
-          <button class="btn btn-primary" data-start-chat="${escapeHtml(person.id)}" type="button">Add Message</button>
-          <button class="btn btn-outline" data-report-user="${escapeHtml(person.id)}" type="button">Report</button>
-        </div>
-      </article>
-    `).join("");
-  }
-
-  function renderContacts() {
-    const container = $("chat-contacts-list");
-    if (!container) return;
-
-    container.innerHTML = state.people.map(person => `
-      <button class="contact-item ${state.selected?.id === person.id ? "active" : ""}"
-        data-start-chat="${escapeHtml(person.id)}" type="button">
-        ${avatarMarkup(person)}
-        <span class="contact-label">
-          <strong>${escapeHtml(person.display_name || person.username)}</strong>
-          <small>@${escapeHtml(person.username)}</small>
-        </span>
-      </button>
-    `).join("") || '<p class="muted small">No other members found.</p>';
-  }
-
-  async function startChat(userId) {
-    const person = state.people.find(item => item.id === userId);
-    if (!person) {
-      await loadPeople();
-    }
-
-    const target = state.people.find(item => item.id === userId);
-    if (!target) return toast("That member could not be found.");
-
-    closeConversation();
-    state.selected = target;
-
-    $("chat-title").textContent = target.display_name || target.username;
-    $("chat-subtitle").textContent = "@" + target.username;
-    $("message-input").disabled = false;
-    $("send-message").disabled = false;
-    $("voice-call").disabled = false;
-    $("video-call").disabled = false;
-    setView("messages");
-    renderContacts();
-    $("chat-messages").innerHTML = '<p class="muted">Opening conversation…</p>';
-
-    const { data, error } = await db.rpc("create_direct_conversation", {
-      other_user: target.id
+    const filtered = people.filter((person) => {
+      return `${person.display_name || ""} ${person.username || ""}`
+        .toLowerCase()
+        .includes(search);
     });
 
-    if (error) {
-      $("chat-messages").textContent = "Could not open chat: " + error.message;
+    list.replaceChildren();
+
+    if (!filtered.length) {
+      const empty = document.createElement("p");
+      empty.className = "muted small";
+      empty.textContent = "No users found.";
+      list.appendChild(empty);
       return;
     }
 
-    state.conversationId = data;
+    filtered.forEach((person) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "person";
+      button.dataset.id = person.id;
+
+      const avatar = document.createElement("img");
+      avatar.src = avatarURL(person);
+      avatar.alt = "";
+      avatar.loading = "lazy";
+
+      const details = document.createElement("span");
+
+      const name = document.createElement("strong");
+      name.textContent = person.display_name || person.username;
+
+      const username = document.createElement("small");
+      username.textContent = `@${person.username}`;
+
+      details.append(name, username);
+      button.append(avatar, details);
+
+      button.addEventListener("click", () => openChat(person));
+
+      list.appendChild(button);
+    });
+
+    refreshIcons();
+  }
+
+  function conversationFilter(personId) {
+    return `and(sender_id.eq.${currentUser.id},recipient_id.eq.${personId}),and(sender_id.eq.${personId},recipient_id.eq.${currentUser.id})`;
+  }
+
+  async function openChat(person) {
+    if (!person || person.id === currentUser.id) return;
+
+    if (activeChannel) {
+      await supabase.removeChannel(activeChannel);
+      activeChannel = null;
+    }
+
+    activePerson = person;
+    showConversation(person);
+
+    $("#messages-list").replaceChildren();
+
     await loadMessages();
-    subscribeMessages();
-    await subscribeSignals();
-    toast("Conversation ready.");
-  }
 
-  function closeConversation() {
-    if (state.messageChannel) db.removeChannel(state.messageChannel);
-    if (state.signalChannel) db.removeChannel(state.signalChannel);
-    state.messageChannel = null;
-    state.signalChannel = null;
-    state.conversationId = null;
-    state.selected = null;
-    state.seenSignals.clear();
-    state.pendingIce = [];
+    activeChannel = supabase
+      .channel(`chat:${[currentUser.id, person.id].sort().join(":")}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages"
+        },
+        (payload) => {
+          const message = payload.new;
 
-    if ($("chat-title")) $("chat-title").textContent = "Choose someone";
-    if ($("chat-subtitle")) $("chat-subtitle").textContent = "Your private conversation";
-    if ($("chat-messages")) $("chat-messages").innerHTML =
-      '<div class="empty-chat"><span>✉</span><h3>Your conversations</h3><p class="muted">Select a person to start chatting.</p></div>';
+          const matches =
+            (message.sender_id === currentUser.id &&
+             message.recipient_id === activePerson?.id) ||
+            (message.sender_id === activePerson?.id &&
+             message.recipient_id === currentUser.id);
 
-    ["message-input", "send-message", "voice-call", "video-call"].forEach(id => {
-      if ($(id)) $(id).disabled = true;
-    });
+          if (matches) renderMessage(message);
+        }
+      )
+      .subscribe();
   }
 
   async function loadMessages() {
-    const cid = state.conversationId;
-    if (!cid) return;
+    if (!activePerson) return;
 
-    const { data, error } = await db.from("messages")
-      .select("id,conversation_id,sender_id,content,image_path,created_at")
-      .eq("conversation_id", cid)
+    const { data, error } = await supabase
+      .from("messages")
+      .select("*")
+      .or(conversationFilter(activePerson.id))
       .order("created_at", { ascending: true })
       .limit(200);
 
     if (error) {
-      $("chat-messages").textContent = "Could not load messages: " + error.message;
+      console.error("Message loading error:", error);
+      toast("Unable to load messages. Check your messages table and RLS policies.");
       return;
     }
 
-    $("chat-messages").innerHTML = "";
-    for (const item of data || []) await renderMessage(item);
-    scrollMessages();
+    const list = $("#messages-list");
+    list.replaceChildren();
+
+    (data || []).forEach(renderMessage);
+    list.scrollTop = list.scrollHeight;
   }
 
-  async function signedImageUrl(path) {
-    if (!path) return null;
-    const { data, error } = await db.storage.from("chat-images")
-      .createSignedUrl(path, 900);
-    if (error) {
-      console.warn("Unable to create image URL:", error.message);
-      return null;
-    }
-    return data.signedUrl;
-  }
+  function renderMessage(message) {
+    const list = $("#messages-list");
+    if (!list) return;
 
-  async function renderMessage(item) {
-    const container = $("chat-messages");
-    if (container.querySelector(`[data-message-id="${item.id}"]`)) return;
-
-    const bubble = document.createElement("article");
-    bubble.className = "message" + (item.sender_id === state.user.id ? " mine" : "");
-    bubble.dataset.messageId = item.id;
-
-    const content = document.createElement("div");
-    content.className = "message-content";
-    content.textContent = item.content || "";
-    bubble.appendChild(content);
-
-    if (item.image_path) {
-      const url = await signedImageUrl(item.image_path);
-      if (url) {
-        const img = document.createElement("img");
-        img.className = "message-image";
-        img.src = url;
-        img.alt = "Shared picture";
-        img.loading = "lazy";
-        bubble.appendChild(img);
-      } else {
-        const unavailable = document.createElement("p");
-        unavailable.className = "muted small";
-        unavailable.textContent = "Picture unavailable or access expired.";
-        bubble.appendChild(unavailable);
-      }
-    }
-
-    const meta = document.createElement("div");
-    meta.className = "message-meta";
-    const who = document.createElement("span");
-    who.textContent = item.sender_id === state.user.id
-      ? "You" : (state.selected?.display_name || state.selected?.username || "Member");
-    const time = document.createElement("time");
-    time.textContent = new Date(item.created_at).toLocaleTimeString([], {
-      hour: "2-digit", minute: "2-digit"
-    });
-    meta.append(who, time);
-    bubble.appendChild(meta);
-    container.appendChild(bubble);
-    scrollMessages();
-  }
-
-  function scrollMessages() {
-    const container = $("chat-messages");
-    if (container) container.scrollTop = container.scrollHeight;
-  }
-
-  function subscribeMessages() {
-    if (state.messageChannel) db.removeChannel(state.messageChannel);
-
-    const cid = state.conversationId;
-    state.messageChannel = db.channel("talkatch-messages-" + cid)
-      .on("postgres_changes", {
-        event: "INSERT", schema: "public", table: "messages",
-        filter: `conversation_id=eq.${cid}`
-      }, async event => {
-        await renderMessage(event.new);
-      })
-      .subscribe();
-  }
-
-  async function sendMessage(event) {
-    event.preventDefault();
-
-    if (!state.conversationId || !state.selected) {
-      return message("chat-status", "Choose a person first.", true);
-    }
-
-    const content = $("message-input").value.trim();
-    const file = state.pendingImage;
-
-    if (!content && !file) {
-      return message("chat-status", "Write a message or attach a picture.", true);
-    }
-
-    let image_path = null;
-
-    if (file) {
-      if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type) || file.size > 5 * 1024 * 1024) {
-        return message("chat-status", "Choose a JPG, PNG, WebP, or GIF under 5 MB.", true);
-      }
-
-      const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
-      image_path = `${state.conversationId}/${state.user.id}/${crypto.randomUUID()}-${safeName}`;
-
-      message("chat-status", "Uploading picture…");
-      const { error: uploadError } = await db.storage.from("chat-images")
-        .upload(image_path, file, { contentType: file.type, upsert: false });
-
-      if (uploadError) return message("chat-status", uploadError.message, true);
-    }
-
-    const { error } = await db.from("messages").insert({
-      conversation_id: state.conversationId,
-      sender_id: state.user.id,
-      content,
-      image_path
-    });
-
-    if (error) {
-      message("chat-status", error.message, true);
+    if (list.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`)) {
       return;
     }
 
-    $("message-input").value = "";
-    $("message-image").value = "";
-    $("image-preview").innerHTML = "";
-    $("image-preview").classList.add("hidden");
-    state.pendingImage = null;
-    message("chat-status", "Sent.");
-    await loadMessages();
-  }
+    const mine = message.sender_id === currentUser.id;
+    const wrapper = document.createElement("div");
 
-  function selectImage(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    wrapper.className = `message ${mine ? "mine" : ""}`;
+    wrapper.dataset.messageId = message.id;
 
-    if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type) || file.size > 5 * 1024 * 1024) {
-      event.target.value = "";
-      state.pendingImage = null;
-      return toast("Choose an image under 5 MB.");
+    const bubble = document.createElement("div");
+    bubble.className = "message-bubble";
+
+    if (message.content) {
+      const text = document.createElement("div");
+      text.textContent = message.content;
+      bubble.appendChild(text);
     }
 
-    state.pendingImage = file;
-    const url = URL.createObjectURL(file);
-    $("image-preview").innerHTML =
-      `<img src="${url}" alt="Selected picture"><button id="remove-image" type="button" class="text-btn">Remove</button>`;
-    $("image-preview").classList.remove("hidden");
-    $("remove-image").addEventListener("click", () => {
-      state.pendingImage = null;
-      $("message-image").value = "";
-      $("image-preview").innerHTML = "";
-      $("image-preview").classList.add("hidden");
-      URL.revokeObjectURL(url);
-    });
-  }
+    if (message.file_url) {
+      const link = document.createElement("a");
 
-  async function reportUser(userId) {
-    const reason = prompt("Why are you reporting this user?");
-    if (!reason || reason.trim().length < 3) return;
+      link.href = message.file_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.className = "file-link";
+      link.textContent = `📎 ${message.file_name || "Open attachment"}`;
 
-    const { error } = await db.rpc("submit_user_report", {
-      target_user: userId,
-      report_reason: reason.trim()
-    });
-
-    if (error) toast("Could not submit report: " + error.message);
-    else toast("Report sent to the moderation team.");
-  }
-
-  // ---------------- WEBRTC CALLS ----------------
-
-  async function makePeerConnection(video) {
-    if (state.pc) state.pc.close();
-
-    state.videoCall = video;
-    state.pendingIce = [];
-    state.stream = await navigator.mediaDevices.getUserMedia({
-      audio: true, video
-    });
-
-    state.pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" }
-      ]
-    });
-
-    state.stream.getTracks().forEach(track => state.pc.addTrack(track, state.stream));
-    $("video-stage").classList.remove("hidden");
-    $("local-video").srcObject = state.stream;
-    $("local-video").style.display = video ? "block" : "none";
-    $("remote-video").srcObject = null;
-
-    state.pc.ontrack = event => {
-      $("remote-video").srcObject = event.streams[0];
-    };
-
-    state.pc.onicecandidate = event => {
-      if (event.candidate) {
-        sendSignal("ice", { candidate: event.candidate.toJSON() }).catch(console.error);
+      if (message.file_type?.startsWith("image/")) {
+        const image = document.createElement("img");
+        image.className = "file-preview";
+        image.src = message.file_url;
+        image.alt = message.file_name || "Image attachment";
+        image.loading = "lazy";
+        bubble.appendChild(image);
       }
-    };
 
-    state.pc.onconnectionstatechange = () => {
-      const connection = state.pc?.connectionState;
-      if (connection === "connected") message("chat-status", "Call connected.");
-      if (connection === "failed") message("chat-status", "Call failed. A TURN server may be required.", true);
-    };
+      bubble.appendChild(link);
+    }
+
+    const time = document.createElement("div");
+    time.className = "message-time";
+
+    time.textContent = message.created_at
+      ? new Date(message.created_at).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit"
+        })
+      : "";
+
+    wrapper.append(bubble, time);
+    list.appendChild(wrapper);
+
+    list.scrollTop = list.scrollHeight;
   }
 
-  async function sendSignal(type, payload = {}) {
-    if (!state.conversationId || !state.selected) throw new Error("Choose a contact first.");
+  async function sendMessage(content = "", attachment = null) {
+    if (!activePerson) {
+      toast("Select someone to message first.");
+      return;
+    }
 
-    const { error } = await db.from("call_signals").insert({
-      conversation_id: state.conversationId,
-      sender_id: state.user.id,
-      recipient_id: state.selected.id,
-      signal_type: type,
-      payload
-    });
+    let fileData = {};
+
+    if (attachment) {
+      if (attachment.size > MAX_FILE_SIZE) {
+        throw new Error("Files must be 15 MB or smaller.");
+      }
+
+      const safeName = attachment.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `${currentUser.id}/${crypto.randomUUID()}-${safeName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(FILE_BUCKET)
+        .upload(path, attachment, {
+          upsert: false,
+          contentType: attachment.type || "application/octet-stream"
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from(FILE_BUCKET)
+        .getPublicUrl(path);
+
+      fileData = {
+        file_url: urlData.publicUrl,
+        file_name: attachment.name,
+        file_type: attachment.type || "application/octet-stream",
+        file_path: path
+      };
+    }
+
+    const row = {
+      sender_id: currentUser.id,
+      recipient_id: activePerson.id,
+      content: content.trim() || null,
+      ...fileData
+    };
+
+    const { data, error } = await supabase
+      .from("messages")
+      .insert(row)
+      .select()
+      .single();
 
     if (error) throw error;
+
+    renderMessage(data);
   }
 
-  async function startCall(video) {
-    if (!state.selected || !state.conversationId) return toast("Choose a person first.");
+  async function onMessageSubmit(event) {
+    event.preventDefault();
+
+    const input = $("#message-input");
+    const content = input.value.trim();
+
+    if (!content) return;
+
+    input.disabled = true;
 
     try {
-      await makePeerConnection(video);
-      const offer = await state.pc.createOffer();
-      await state.pc.setLocalDescription(offer);
-      await sendSignal("offer", {
-        type: offer.type,
-        sdp: offer.sdp,
-        video
+      await sendMessage(content);
+      input.value = "";
+    } catch (error) {
+      console.error(error);
+      toast(error.message || "Message could not be sent.");
+    } finally {
+      input.disabled = false;
+      input.focus();
+    }
+  }
+
+  async function onFileSelected(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) return;
+
+    try {
+      $("#attachment-status").textContent = `Uploading ${file.name}...`;
+      await sendMessage("", file);
+      $("#attachment-status").textContent = "File sent.";
+    } catch (error) {
+      console.error(error);
+      $("#attachment-status").textContent = "";
+      toast(error.message || "File upload failed.");
+    }
+  }
+
+  async function saveProfile(event) {
+    event.preventDefault();
+
+    const displayName = $("#profile-display-name").value.trim();
+    const username = $("#profile-username").value.trim();
+    const bio = $("#profile-bio").value.trim();
+    const file = $("#profile-avatar-file").files?.[0];
+
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
+      toast("Username must be 3–24 letters, numbers, or underscores.");
+      return;
+    }
+
+    const changes = {
+      id: currentUser.id,
+      display_name: displayName,
+      username,
+      bio
+    };
+
+    try {
+      if (file) {
+        if (file.size > 3 * 1024 * 1024) {
+          throw new Error("Profile pictures must be 3 MB or smaller.");
+        }
+
+        if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+          throw new Error("Use a JPG, PNG, or WebP image.");
+        }
+
+        const extension = file.type === "image/png" ? "png" :
+          file.type === "image/webp" ? "webp" : "jpg";
+
+        const path = `${currentUser.id}/${crypto.randomUUID()}.${extension}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from(AVATAR_BUCKET)
+          .upload(path, file, { contentType: file.type });
+
+        if (uploadError) throw uploadError;
+
+        const { data } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(path);
+        changes.avatar_url = data.publicUrl;
+      }
+
+      const { error } = await supabase
+        .from("profiles")
+        .upsert(changes, { onConflict: "id" });
+
+      if (error) throw error;
+
+      await loadProfile();
+      await loadPeople();
+
+      $("#profile-modal").hidden = true;
+      toast("Profile updated.");
+    } catch (error) {
+      console.error(error);
+      toast(error.message || "Unable to save profile.");
+    }
+  }
+
+  /* WEBRTC CALLS */
+
+  async function getLocalMedia(mode) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Camera and microphone access requires HTTPS.");
+    }
+
+    return navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: mode === "video"
+    });
+  }
+
+  function showCallModal(title, status) {
+    $("#call-modal").hidden = false;
+    $("#call-title").textContent = title;
+    $("#call-status").textContent = status;
+    refreshIcons();
+  }
+
+  async function startCall(mode) {
+    if (!activePerson) {
+      toast("Select someone to call.");
+      return;
+    }
+
+    if (callId) {
+      toast("A call is already active.");
+      return;
+    }
+
+    callMode = mode;
+    callDirection = "outgoing";
+    callId = crypto.randomUUID();
+    pendingIce = [];
+
+    try {
+      showCallModal(
+        `${mode === "video" ? "Video" : "Voice"} call`,
+        "Requesting microphone and camera..."
+      );
+
+      localStream = await getLocalMedia(mode);
+      $("#local-video").srcObject = localStream;
+      $("#local-video").hidden = mode !== "video";
+
+      pc = createPeerConnection();
+
+      localStream.getTracks().forEach((track) => {
+        pc.addTrack(track, localStream);
       });
 
-      $("end-call").classList.remove("hidden");
-      message("chat-status", "Calling " + (state.selected.display_name || state.selected.username) + "…");
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const { error } = await supabase.from("call_signals").insert({
+        call_id: callId,
+        sender_id: currentUser.id,
+        recipient_id: activePerson.id,
+        kind: "offer",
+        payload: {
+          sdp: offer.sdp,
+          mode
+        }
+      });
+
+      if (error) throw error;
+
+      $("#incoming-call-actions").hidden = true;
+      $("#end-call-btn").hidden = false;
+
+      await subscribeToCall();
+
+      $("#call-status").textContent = `Calling ${activePerson.display_name || activePerson.username}...`;
     } catch (error) {
-      endCall(false);
-      message("chat-status", "Call could not start: " + error.message, true);
+      console.error("Call start error:", error);
+      toast(error.message || "Unable to start call.");
+      await endCall(false);
     }
   }
 
-  async function subscribeSignals() {
-    if (state.signalChannel) db.removeChannel(state.signalChannel);
+  function createPeerConnection() {
+    const connection = new RTCPeerConnection(rtcConfig);
 
-    const cid = state.conversationId;
-    state.signalChannel = db.channel("talkatch-signals-" + cid)
-      .on("postgres_changes", {
-        event: "INSERT", schema: "public", table: "call_signals",
-        filter: `recipient_id=eq.${state.user.id}`
-      }, event => {
-        if (event.new.conversation_id === cid) receiveSignal(event.new);
-      })
-      .subscribe();
-  }
+    connection.onicecandidate = async (event) => {
+      if (!event.candidate || !callId || !activePerson) return;
 
-  async function subscribeIncomingCalls() {
-    // This lightweight listener announces calls in any conversation.
-    // Accepting a call requires opening its conversation first.
-    db.channel("talkatch-incoming-" + state.user.id)
-      .on("postgres_changes", {
-        event: "INSERT", schema: "public", table: "call_signals",
-        filter: `recipient_id=eq.${state.user.id}`
-      }, event => {
-        const signal = event.new;
-        if (signal.signal_type !== "offer" || signal.conversation_id === state.conversationId) return;
-        toast("Incoming call. Open that person's chat to answer.");
-      })
-      .subscribe();
-  }
+      const { error } = await supabase.from("call_signals").insert({
+        call_id: callId,
+        sender_id: currentUser.id,
+        recipient_id: activePerson.id,
+        kind: "ice",
+        payload: event.candidate.toJSON()
+      });
 
-  async function receiveSignal(signal) {
-    if (state.seenSignals.has(signal.id)) return;
-    state.seenSignals.add(signal.id);
+      if (error) console.error("ICE signaling error:", error);
+    };
 
-    try {
-      if (signal.signal_type === "offer") {
-        state.incomingOffer = signal;
-        $("call-banner-text").textContent =
-          "Incoming " + (signal.payload.video ? "video" : "voice") + " call from " +
-          (state.selected?.display_name || state.selected?.username || "member");
-        $("call-banner").classList.remove("hidden");
-      } else if (signal.signal_type === "answer" && state.pc) {
-        await state.pc.setRemoteDescription({
-          type: "answer", sdp: signal.payload.sdp
-        });
-        await drainIce();
-      } else if (signal.signal_type === "ice" && state.pc && signal.payload.candidate) {
-        const candidate = new RTCIceCandidate(signal.payload.candidate);
-        if (state.pc.remoteDescription) await state.pc.addIceCandidate(candidate);
-        else state.pendingIce.push(candidate);
-      } else if (signal.signal_type === "hangup" || signal.signal_type === "decline") {
-        endCall(false);
-        message("chat-status", signal.signal_type === "hangup" ? "Call ended." : "Call declined.");
+    connection.ontrack = (event) => {
+      const stream = event.streams[0];
+
+      if (stream) {
+        $("#remote-video").srcObject = stream;
       }
-    } catch (error) {
-      message("chat-status", "Call signaling error: " + error.message, true);
-    }
+
+      $("#call-status").textContent = "Connected";
+    };
+
+    connection.onconnectionstatechange = () => {
+      if (!pc) return;
+
+      if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+        $("#call-status").textContent = `Connection ${pc.connectionState}`;
+      }
+    };
+
+    connection.onnegotiationneeded = async () => {
+      // Initial offer is created explicitly in startCall().
+    };
+
+    return connection;
   }
 
-  async function drainIce() {
-    if (!state.pc?.remoteDescription) return;
-    for (const candidate of state.pendingIce) {
-      await state.pc.addIceCandidate(candidate);
+  async function subscribeToCall() {
+    if (!callId || !activePerson) return;
+
+    if (callChannel) {
+      await supabase.removeChannel(callChannel);
     }
-    state.pendingIce = [];
+
+    callChannel = supabase
+      .channel(`call:${callId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "call_signals",
+          filter: `call_id=eq.${callId}`
+        },
+        async (payload) => {
+          await handleSignal(payload.new);
+        }
+      )
+      .subscribe();
+  }
+
+  async function handleSignal(signal) {
+    if (!callId || signal.call_id !== callId) return;
+    if (signal.sender_id === currentUser.id) return;
+
+    if (signal.kind === "offer") {
+      if (callDirection === "outgoing") return;
+
+      pendingOffer = signal;
+      return;
+    }
+
+    if (signal.kind === "answer" && pc && callDirection === "outgoing") {
+      if (pc.signalingState !== "have-local-offer") return;
+
+      await pc.setRemoteDescription({
+        type: "answer",
+        sdp: signal.payload.sdp
+      });
+
+      for (const candidate of pendingIce) {
+        await pc.addIceCandidate(candidate);
+      }
+
+      pendingIce = [];
+      return;
+    }
+
+    if (signal.kind === "ice" && pc && signal.payload) {
+      const candidate = new RTCIceCandidate(signal.payload);
+
+      if (pc.remoteDescription) {
+        await pc.addIceCandidate(candidate);
+      } else {
+        pendingIce.push(candidate);
+      }
+
+      return;
+    }
+
+    if (signal.kind === "hangup") {
+      toast("The other person ended the call.");
+      await endCall(false);
+    }
   }
 
   async function acceptCall() {
-    const offer = state.incomingOffer;
-    if (!offer || !state.selected || offer.sender_id !== state.selected.id) {
-      return toast("Open the caller's conversation first.");
+    if (!pendingOffer) {
+      toast("No incoming call is available.");
+      return;
     }
 
+    const offerSignal = pendingOffer;
+    pendingOffer = null;
+
+    callId = offerSignal.call_id;
+    callMode = offerSignal.payload.mode || "audio";
+    callDirection = "incoming";
+    activePerson = people.find((p) => p.id === offerSignal.sender_id) || {
+      id: offerSignal.sender_id,
+      display_name: "Caller",
+      username: "caller"
+    };
+
     try {
-      await makePeerConnection(Boolean(offer.payload.video));
-      await state.pc.setRemoteDescription({
-        type: "offer", sdp: offer.payload.sdp
+      $("#incoming-call-actions").hidden = true;
+
+      localStream = await getLocalMedia(callMode);
+
+      $("#local-video").srcObject = localStream;
+      $("#local-video").hidden = callMode !== "video";
+
+      pc = createPeerConnection();
+
+      localStream.getTracks().forEach((track) => {
+        pc.addTrack(track, localStream);
       });
-      await drainIce();
 
-      const answer = await state.pc.createAnswer();
-      await state.pc.setLocalDescription(answer);
-      await sendSignal("answer", { type: answer.type, sdp: answer.sdp });
+      await pc.setRemoteDescription({
+        type: "offer",
+        sdp: offerSignal.payload.sdp
+      });
 
-      $("call-banner").classList.add("hidden");
-      $("end-call").classList.remove("hidden");
-      message("chat-status", "Connecting call…");
-      state.incomingOffer = null;
+      for (const candidate of pendingIce) {
+        await pc.addIceCandidate(candidate);
+      }
+
+      pendingIce = [];
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      const { error } = await supabase.from("call_signals").insert({
+        call_id: callId,
+        sender_id: currentUser.id,
+        recipient_id: activePerson.id,
+        kind: "answer",
+        payload: { sdp: answer.sdp }
+      });
+
+      if (error) throw error;
+
+      await subscribeToCall();
+
+      $("#call-title").textContent =
+        `${callMode === "video" ? "Video" : "Voice"} call`;
+
+      $("#call-status").textContent = "Connecting...";
+      $("#end-call-btn").hidden = false;
     } catch (error) {
-      message("chat-status", "Could not answer: " + error.message, true);
+      console.error("Accept call error:", error);
+      toast(error.message || "Unable to accept call.");
+      await endCall(false);
     }
   }
 
   async function declineCall() {
-    if (state.incomingOffer && state.selected) {
-      try { await sendSignal("decline"); } catch (_) {}
+    if (pendingOffer) {
+      const offer = pendingOffer;
+      pendingOffer = null;
+
+      await supabase.from("call_signals").insert({
+        call_id: offer.call_id,
+        sender_id: currentUser.id,
+        recipient_id: offer.sender_id,
+        kind: "hangup",
+        payload: { reason: "declined" }
+      });
     }
-    state.incomingOffer = null;
-    $("call-banner").classList.add("hidden");
+
+    await endCall(false);
   }
 
   async function endCall(notify = true) {
-    if (notify && state.selected && state.conversationId && state.pc) {
-      try { await sendSignal("hangup"); } catch (_) {}
+    const previousCallId = callId;
+    const otherId = activePerson?.id;
+
+    if (notify && previousCallId && otherId && currentUser) {
+      await supabase.from("call_signals").insert({
+        call_id: previousCallId,
+        sender_id: currentUser.id,
+        recipient_id: otherId,
+        kind: "hangup",
+        payload: {}
+      }).catch(console.error);
     }
 
-    if (state.pc) state.pc.close();
-    state.pc = null;
+    if (callChannel) {
+      await supabase.removeChannel(callChannel);
+      callChannel = null;
+    }
 
-    if (state.stream) state.stream.getTracks().forEach(track => track.stop());
-    state.stream = null;
+    if (pc) {
+      pc.ontrack = null;
+      pc.onicecandidate = null;
+      pc.close();
+      pc = null;
+    }
 
-    $("local-video").srcObject = null;
-    $("remote-video").srcObject = null;
-    $("video-stage").classList.add("hidden");
-    $("end-call").classList.add("hidden");
-    $("call-banner").classList.add("hidden");
-    state.pendingIce = [];
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+      localStream = null;
+    }
+
+    $("#local-video").srcObject = null;
+    $("#remote-video").srcObject = null;
+
+    $("#call-modal").hidden = true;
+    $("#incoming-call-actions").hidden = true;
+
+    callId = null;
+    callDirection = null;
+    pendingOffer = null;
+    pendingIce = [];
+
+    $("#mute-btn").innerHTML = '<i data-lucide="mic"></i>';
+    $("#camera-btn").innerHTML = '<i data-lucide="video"></i>';
+
+    refreshIcons();
   }
 
-  // ---------------- ADMIN PANEL ----------------
-
-  async function loadAdmin() {
-    if (state.profile?.role !== "admin") {
-      setView("home");
-      return toast("Administrator access required.");
+  async function watchIncomingCalls() {
+    if (callWatcher) {
+      await supabase.removeChannel(callWatcher);
     }
 
-    const [usersResult, reportsResult] = await Promise.all([
-      db.rpc("admin_list_users"),
-      db.rpc("admin_list_reports")
-    ]);
+    callWatcher = supabase
+      .channel(`incoming-calls:${currentUser.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "call_signals",
+          filter: `recipient_id=eq.${currentUser.id}`
+        },
+        async (payload) => {
+          const signal = payload.new;
 
-    if (usersResult.error || reportsResult.error) {
-      $("admin-users-list").textContent =
-        "Admin query failed. Verify the Supabase admin functions and role.";
-      $("admin-reports-list").textContent = "";
+          if (signal.kind !== "offer") {
+            if (signal.call_id === callId) await handleSignal(signal);
+            return;
+          }
+
+          if (callId) return;
+
+          pendingOffer = signal;
+          callId = signal.call_id;
+          callMode = signal.payload.mode || "audio";
+          callDirection = "incoming";
+
+          const caller = people.find((p) => p.id === signal.sender_id);
+
+          showCallModal(
+            `Incoming ${callMode === "video" ? "video" : "voice"} call`,
+            `${caller?.display_name || "Someone"} is calling you`
+          );
+
+          $("#incoming-call-actions").hidden = false;
+          $("#end-call-btn").hidden = true;
+
+          refreshIcons();
+        }
+      )
+      .subscribe();
+  }
+
+  async function toggleMute() {
+    if (!localStream) return;
+
+    const track = localStream.getAudioTracks()[0];
+    if (!track) return;
+
+    track.enabled = !track.enabled;
+
+    $("#mute-btn").title = track.enabled ? "Mute microphone" : "Unmute microphone";
+    toast(track.enabled ? "Microphone on" : "Microphone muted");
+  }
+
+  async function toggleCamera() {
+    if (!localStream) return;
+
+    const track = localStream.getVideoTracks()[0];
+    if (!track) {
+      toast("This is an audio-only call.");
       return;
     }
 
-    const users = usersResult.data || [];
-    const reports = reportsResult.data || [];
-    $("admin-member-count").textContent = users.length;
-    $("admin-report-count").textContent = reports.filter(r => r.status === "open").length;
+    track.enabled = !track.enabled;
 
-    renderAdminUsers(users);
-    renderAdminReports(reports);
+    $("#camera-btn").title = track.enabled ? "Turn camera off" : "Turn camera on";
+    toast(track.enabled ? "Camera on" : "Camera off");
   }
 
-  function renderAdminUsers(users) {
-    const search = $("admin-user-search").value.trim().toLowerCase();
-    const filtered = users.filter(user =>
-      `${user.username} ${user.display_name} ${user.role}`.toLowerCase().includes(search)
-    );
+  async function enterApp(user) {
+    currentUser = user;
 
-    $("admin-users-list").innerHTML = filtered.map(user => `
-      <div class="admin-row">
-        <div>
-          <strong>${escapeHtml(user.display_name || user.username)}</strong>
-          <p class="muted small">@${escapeHtml(user.username)} · ${escapeHtml(user.role)}</p>
-          <p class="small">${user.is_suspended ? "Suspended" : "Active"}</p>
-        </div>
-        <div class="admin-actions">
-          ${user.id !== state.user.id && user.role !== "admin" ? `
-            <button class="btn ${user.is_suspended ? "btn-primary" : "btn-danger"}"
-              data-suspend="${escapeHtml(user.id)}"
-              data-next="${user.is_suspended ? "false" : "true"}" type="button">
-              ${user.is_suspended ? "Restore" : "Suspend"}
-            </button>` : ""}
-        </div>
-      </div>
-    `).join("") || '<p class="muted">No members found.</p>';
-  }
+    showApp();
 
-  function renderAdminReports(reports) {
-    $("admin-reports-list").innerHTML = reports.map(report => `
-      <div class="report-item">
-        <div class="admin-row">
-          <div>
-            <strong>Report · ${escapeHtml(report.status)}</strong>
-            <p>${escapeHtml(report.reason)}</p>
-            <p class="muted small">Reported user: ${escapeHtml(report.reported_username || report.reported_user_id)}</p>
-            <p class="muted small">${escapeHtml(new Date(report.created_at).toLocaleString())}</p>
-          </div>
-          <div class="admin-actions">
-            ${report.status === "open" ? `
-              <button class="btn btn-outline" data-report-status="${escapeHtml(report.id)}" data-next-status="reviewing" type="button">Review</button>
-              <button class="btn btn-primary" data-report-status="${escapeHtml(report.id)}" data-next-status="resolved" type="button">Resolve</button>
-              <button class="btn btn-outline" data-report-status="${escapeHtml(report.id)}" data-next-status="dismissed" type="button">Dismiss</button>
-            ` : ""}
-          </div>
-        </div>
-      </div>
-    `).join("") || '<p class="muted">No reports yet.</p>';
-  }
-
-  async function suspendUser(userId, suspended) {
-    const confirmText = suspended ? "Suspend this member?" : "Restore this member?";
-    if (!confirm(confirmText)) return;
-
-    const { error } = await db.rpc("admin_set_suspension", {
-      target_user: userId,
-      suspended
-    });
-
-    if (error) toast("Could not update member: " + error.message);
-    else {
-      toast(suspended ? "Member suspended." : "Member restored.");
-      await loadAdmin();
+    try {
+      await loadProfile();
+    } catch (error) {
+      console.error("Profile error:", error);
+      toast("Unable to load your profile. Check the profiles table and policies.");
     }
+
+    await loadPeople();
+    await watchIncomingCalls();
   }
 
-  async function updateReport(reportId, status) {
-    const { error } = await db.rpc("admin_update_report", {
-      target_report: reportId,
-      new_status: status
-    });
+  async function logout() {
+    await endCall(false);
 
-    if (error) toast("Could not update report: " + error.message);
-    else {
-      toast("Report updated.");
-      await loadAdmin();
-    }
+    if (activeChannel) await supabase.removeChannel(activeChannel);
+    if (callWatcher) await supabase.removeChannel(callWatcher);
+
+    activeChannel = null;
+    callWatcher = null;
+    activePerson = null;
+    currentProfile = null;
+    currentUser = null;
+
+    const { error } = await supabase.auth.signOut();
+
+    if (error) toast(error.message);
+
+    showAuth();
   }
 
   function bindEvents() {
-    $("login-form").addEventListener("submit", authLogin);
-    $("signup-form").addEventListener("submit", authSignup);
+    $("#login-tab").addEventListener("click", () => setAuthTab("login"));
+    $("#signup-tab").addEventListener("click", () => setAuthTab("signup"));
 
-    document.querySelectorAll("[data-auth-tab]").forEach(button => {
-      button.addEventListener("click", () => setAuthMode(button.dataset.authTab));
+    $("#loginForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const form = new FormData(event.currentTarget);
+      const email = String(form.get("email") || "").trim();
+      const password = String(form.get("password") || "");
+
+      const button = event.currentTarget.querySelector("button[type=submit]");
+      button.disabled = true;
+
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
+
+        if (error) throw error;
+
+        await enterApp(data.user);
+      } catch (error) {
+        setAuthMessage(error.message || "Unable to log in.");
+      } finally {
+        button.disabled = false;
+      }
     });
 
-    $("forgot-password").addEventListener("click", async () => {
-      const email = $("login-email").value.trim();
-      if (!email) return message("auth-status", "Enter your email address first.", true);
-      const { error } = await db.auth.resetPasswordForEmail(email);
-      message("auth-status", error ? error.message : "Password reset email requested.", Boolean(error));
-    });
+    $("#signupForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
 
-    $("logout-btn").addEventListener("click", async () => {
-      await endCall(false);
-      await db.auth.signOut();
-      showAuth();
-    });
+      const form = new FormData(event.currentTarget);
 
-    $("theme-toggle").addEventListener("click", () => {
-      document.body.dataset.theme =
-        document.body.dataset.theme === "dark" ? "light" : "dark";
-    });
+      const display_name = String(form.get("display_name") || "").trim();
+      const username = String(form.get("username") || "").trim();
+      const email = String(form.get("email") || "").trim();
+      const password = String(form.get("password") || "");
 
-    document.querySelectorAll("[data-view]").forEach(button => {
-      button.addEventListener("click", () => setView(button.dataset.view));
-    });
-
-    document.querySelectorAll("[data-go]").forEach(button => {
-      button.addEventListener("click", () => setView(button.dataset.go));
-    });
-
-    $("people-search").addEventListener("input", loadPeople);
-    $("chat-search").addEventListener("input", loadPeople);
-    $("admin-user-search").addEventListener("input", loadAdmin);
-    $("message-form").addEventListener("submit", sendMessage);
-    $("message-image").addEventListener("change", selectImage);
-    $("voice-call").addEventListener("click", () => startCall(false));
-    $("video-call").addEventListener("click", () => startCall(true));
-    $("end-call").addEventListener("click", () => endCall(true));
-    $("accept-call").addEventListener("click", acceptCall);
-    $("decline-call").addEventListener("click", declineCall);
-
-    document.body.addEventListener("click", async event => {
-      const chatButton = event.target.closest("[data-start-chat]");
-      if (chatButton) {
-        const id = chatButton.dataset.startChat;
-        setView("messages");
-        await startChat(id);
+      if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
+        setAuthMessage("Username must contain 3–24 letters, numbers, or underscores.");
         return;
       }
 
-      const reportButton = event.target.closest("[data-report-user]");
-      if (reportButton) {
-        await reportUser(reportButton.dataset.reportUser);
-        return;
-      }
+      try {
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { display_name, username },
+            emailRedirectTo: window.location.origin
+          }
+        });
 
-      const suspendButton = event.target.closest("[data-suspend]");
-      if (suspendButton) {
-        await suspendUser(suspendButton.dataset.suspend, suspendButton.dataset.next === "true");
-        return;
-      }
+        if (error) throw error;
 
-      const reportStatusButton = event.target.closest("[data-report-status]");
-      if (reportStatusButton) {
-        await updateReport(reportStatusButton.dataset.reportStatus, reportStatusButton.dataset.nextStatus);
+        if (data.session && data.user) {
+          await enterApp(data.user);
+        } else {
+          setAuthMessage("Account created. Check your email and confirm your address before logging in.");
+        }
+      } catch (error) {
+        setAuthMessage(error.message || "Unable to create your account.");
       }
     });
 
-    $("year").textContent = new Date().getFullYear();
+    $("#messageForm").addEventListener("submit", onMessageSubmit);
+    $("#file-input").addEventListener("change", onFileSelected);
+
+    $("#user-search").addEventListener("input", renderPeople);
+
+    $("#logout-btn").addEventListener("click", logout);
+
+    $("#theme-toggle").addEventListener("click", () => {
+      document.body.classList.toggle("dark");
+
+      localStorage.setItem(
+        "talkatch-theme",
+        document.body.classList.contains("dark") ? "dark" : "light"
+      );
+    });
+
+    $("#my-account").addEventListener("click", () => {
+      $("#profile-modal").hidden = false;
+      refreshIcons();
+    });
+
+    $("#close-profile-btn").addEventListener("click", () => {
+      $("#profile-modal").hidden = true;
+    });
+
+    $("#profileForm").addEventListener("submit", saveProfile);
+
+    $("#profile-avatar-file").addEventListener("change", (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      $("#profile-avatar-preview").src = URL.createObjectURL(file);
+    });
+
+    $("#voice-call-btn").addEventListener("click", () => startCall("audio"));
+    $("#video-call-btn").addEventListener("click", () => startCall("video"));
+
+    $("#accept-call-btn").addEventListener("click", acceptCall);
+    $("#decline-call-btn").addEventListener("click", declineCall);
+
+    $("#end-call-btn").addEventListener("click", () => endCall(true));
+    $("#mute-btn").addEventListener("click", toggleMute);
+    $("#camera-btn").addEventListener("click", toggleCamera);
+
+    $("#back-to-people").addEventListener("click", () => {
+      document.body.classList.remove("chat-open");
+    });
   }
 
   async function init() {
-    bindEvents();
-
-    const { data, error } = await db.auth.getSession();
-    if (error) {
-      message("auth-status", error.message, true);
+    if (!config.supabaseUrl || !config.supabasePublishableKey ||
+        config.supabasePublishableKey.includes("PASTE_YOUR")) {
+      showAuth();
+      setAuthMessage("Set your Supabase URL and public key in config.js.");
       return;
     }
 
-    if (data.session?.user) {
-      state.user = data.session.user;
-      try {
-        await showApp();
-        setView("home");
-      } catch (err) {
-        message("auth-status", err.message, true);
-      }
+    if (!window.supabase) {
+      showAuth();
+      setAuthMessage("Unable to load Supabase. Check your internet connection.");
+      return;
+    }
+
+    supabase = window.supabase.createClient(
+      config.supabaseUrl,
+      config.supabasePublishableKey
+    );
+
+    bindEvents();
+
+    if (localStorage.getItem("talkatch-theme") === "dark") {
+      document.body.classList.add("dark");
+    }
+
+    const { data, error } = await supabase.auth.getSession();
+
+    if (error) console.error("Session error:", error);
+
+    if (data?.session?.user) {
+      await enterApp(data.session.user);
     } else {
       showAuth();
     }
 
-    db.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT") showAuth();
-      else if (event === "SIGNED_IN" && session?.user && !state.user) {
-        state.user = session.user;
-        showApp().catch(err => message("auth-status", err.message, true));
+    supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        currentUser = null;
+        showAuth();
       }
     });
+
+    refreshIcons();
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once: true });
-  } else {
-    init();
-  }
+  document.addEventListener("DOMContentLoaded", init);
 })();
