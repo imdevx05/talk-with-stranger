@@ -1,5 +1,5 @@
 
 window.TALKATCH_CONFIG = {
-  supabaseUrl: "https://bpfbutcrckutvkaezhfr.supabase.co",
-  supabasePublishableKey: "sb_publishable_rXl-G9ZEVCOwLdWSwTXP6Q_6b0U1mSh"
+  supabaseUrl: "https://abnyjeijhbhjushltykr.supabase.co",
+  supabasePublishableKey: "sb_publishable_71WzHH-xS4CPXkAh_2nJ-w_HPLKOByY"
 };
