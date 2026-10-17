@@ -1,181 +1,312 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#10131c">
-  <title>TALKATCH — Chat & Connect</title>
+  <title>TALKATCH — Chat, Voice & Video</title>
+
   <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
+
 <body>
   <div id="toast" class="toast hidden" role="status"></div>
 
-  <main id="auth-view" class="auth-wrap">
+  <!-- AUTHENTICATION -->
+  <main id="auth-view" class="auth-shell">
     <section class="auth-card">
-      <h1>✦ TALKATCH</h1>
-      <p class="muted">Talk to anyone. Stay connected.</p>
+      <div class="brand">
+        <span class="brand-mark">T</span>
+        <div>
+          <b>TALKATCH</b>
+          <small>Talk to anyone. Stay connected.</small>
+        </div>
+      </div>
 
-      <div class="tabs">
-        <button type="button" data-tab="login" class="active">Log in</button>
+      <h1 id="auth-title">Welcome back</h1>
+      <p class="muted">Messages, file sharing, voice and video calls in one place.</p>
+
+      <div class="auth-tabs">
+        <button type="button" class="active" data-tab="login">Log in</button>
         <button type="button" data-tab="signup">Create account</button>
       </div>
 
-      <form id="login-form">
-        <label>Email
-          <input name="email" type="email" autocomplete="email" required>
+      <form id="login-form" class="form-stack">
+        <label>
+          Email
+          <input
+            name="email"
+            type="email"
+            autocomplete="email"
+            required
+            placeholder="you@example.com"
+          >
         </label>
-        <label>Password
-          <input name="password" type="password"
-                 autocomplete="current-password" required minlength="8">
+
+        <label>
+          Password
+          <input
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            minlength="8"
+            placeholder="At least 8 characters"
+          >
         </label>
-        <button class="primary">Log in</button>
-        <button type="button" id="forgot-password" class="link">
-          Forgot password?
-        </button>
+
+        <button class="primary" type="submit">Log in</button>
       </form>
 
-      <form id="signup-form" class="hidden">
-        <label>Display name
-          <input name="display_name" required maxlength="60">
+      <form id="signup-form" class="form-stack hidden">
+        <label>
+          Display name
+          <input
+            name="display_name"
+            required
+            maxlength="60"
+            placeholder="Your name"
+          >
         </label>
-        <label>Username
-          <input name="username" required minlength="3" maxlength="24"
-                 pattern="[A-Za-z0-9_]+" placeholder="your_username">
+
+        <label>
+          Username
+          <input
+            name="username"
+            required
+            minlength="3"
+            maxlength="24"
+            pattern="[A-Za-z0-9_]+"
+            placeholder="your_username"
+          >
         </label>
-        <label>Email
-          <input name="email" type="email" autocomplete="email" required>
+
+        <label>
+          Email
+          <input
+            name="email"
+            type="email"
+            autocomplete="email"
+            required
+            placeholder="you@example.com"
+          >
         </label>
-        <label>Password
-          <input name="password" type="password"
-                 autocomplete="new-password" required minlength="8">
+
+        <label>
+          Password
+          <input
+            name="password"
+            type="password"
+            autocomplete="new-password"
+            minlength="8"
+            required
+            placeholder="At least 8 characters"
+          >
         </label>
-        <button class="primary">Create account</button>
+
+        <button class="primary" type="submit">Create account</button>
       </form>
 
       <p id="auth-message" class="notice hidden"></p>
-      <p class="muted tiny">
-        Enable email confirmation in Supabase Auth if you want verified accounts.
+
+      <p class="tiny">
+        Email confirmation may be required, depending on your Supabase Auth settings.
       </p>
     </section>
   </main>
 
-  <main id="app-view" class="layout hidden">
+  <!-- MAIN APPLICATION -->
+  <main id="app-view" class="app-shell hidden">
     <aside class="sidebar">
-      <div class="brand">✦ TALKATCH</div>
+      <div class="brand">
+        <span class="brand-mark">T</span>
+        <div>
+          <b>TALKATCH</b>
+          <small>Chat & calls</small>
+        </div>
+      </div>
 
-      <div class="self">
-        <img id="my-avatar" alt="Your profile picture"
-             src="https://api.dicebear.com/9.x/initials/svg?seed=Member">
-        <input id="avatar-upload" type="file"
-               accept="image/png,image/jpeg,image/webp" hidden>
-        <div class="grow">
+      <div class="self-card">
+        <img
+          id="my-avatar"
+          src="https://api.dicebear.com/9.x/initials/svg?seed=Me"
+          alt="Your avatar"
+          title="Click to change profile picture"
+          tabindex="0"
+          role="button"
+        >
+
+        <input
+          id="avatar-upload"
+          class="hidden"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+        >
+
+        <div class="minw">
           <strong id="my-name">Member</strong>
           <small id="my-handle">@member</small>
         </div>
-        <button id="theme-button" class="icon" title="Toggle theme">◐</button>
+
+        <button
+          id="theme-button"
+          class="icon-btn"
+          type="button"
+          title="Toggle theme"
+          aria-label="Toggle theme"
+        >◐</button>
       </div>
 
-      <button id="edit-profile" class="secondary">Edit profile</button>
+      <div class="side-heading">
+        <span>DIRECT MESSAGES</span>
+        <button id="refresh-users" class="text-btn" type="button">Refresh</button>
+      </div>
 
-      <label class="search">
-        <input id="user-search" type="search" placeholder="Search people...">
+      <label class="searchbox">
+        <span>⌕</span>
+        <input
+          id="user-search"
+          type="search"
+          placeholder="Find people…"
+          autocomplete="off"
+        >
       </label>
 
-      <h3>PEOPLE</h3>
-      <div id="people-list" class="people"></div>
+      <div id="people-list" class="people-list">
+        <div class="empty-small">Loading people…</div>
+      </div>
 
-      <div class="bottom">
-        <span class="online-dot"></span> Connected
-        <button id="logout-button" class="link">Log out</button>
+      <div class="sidebar-bottom">
+        <span class="online-dot"></span>
+        <span>Signed in securely</span>
+        <button id="logout-button" class="text-btn" type="button">Log out</button>
       </div>
     </aside>
 
-    <section class="chat">
+    <section class="chat-panel">
       <header class="chat-header">
-        <div class="person-head">
-          <img id="chat-avatar"
-               src="https://api.dicebear.com/9.x/initials/svg?seed=Talkatch"
-               alt="">
-          <div>
-            <strong id="chat-title">Choose someone</strong>
-            <small id="chat-subtitle">Start a conversation</small>
+        <div class="chat-person">
+          <div class="avatar-wrap">
+            <img
+              id="chat-avatar"
+              src="https://api.dicebear.com/9.x/initials/svg?seed=Talkatch"
+              alt=""
+            >
+            <span id="chat-presence" class="presence"></span>
+          </div>
+
+          <div class="minw">
+            <h2 id="chat-title">Choose a person</h2>
+            <p id="chat-subtitle" class="muted">
+              Select someone from the left to start a conversation.
+            </p>
           </div>
         </div>
 
-        <div class="actions">
-          <button id="voice-call" class="secondary" disabled>☎ Voice</button>
-          <button id="video-call" class="secondary" disabled>▣ Video</button>
+        <div class="call-actions">
+          <button
+            id="voice-call"
+            class="call-btn"
+            type="button"
+            disabled
+            title="Start voice call"
+          >
+            <span>☎</span><span class="btn-label">Voice</span>
+          </button>
+
+          <button
+            id="video-call"
+            class="call-btn"
+            type="button"
+            disabled
+            title="Start video call"
+          >
+            <span>▣</span><span class="btn-label">Video</span>
+          </button>
         </div>
       </header>
 
       <div id="call-banner" class="call-banner hidden">
         <div>
           <strong id="call-status">Incoming call</strong>
-          <p id="call-detail">Someone is calling you.</p>
+          <small id="call-detail">A member is calling you.</small>
         </div>
-        <div class="actions">
-          <button id="accept-call" class="primary">Accept</button>
-          <button id="decline-call" class="danger">Decline</button>
-          <button id="end-call" class="danger hidden">End call</button>
+
+        <div class="call-banner-actions">
+          <button id="accept-call" class="primary small-btn" type="button">
+            Accept
+          </button>
+
+          <button id="decline-call" class="danger small-btn" type="button">
+            Decline
+          </button>
+
+          <button id="end-call" class="danger small-btn hidden" type="button">
+            End call
+          </button>
         </div>
       </div>
 
-      <section id="call-stage" class="call-stage hidden">
+      <section id="call-stage" class="call-stage hidden" aria-label="Call video">
         <div class="video-grid">
           <video id="remote-video" autoplay playsinline></video>
           <video id="local-video" autoplay muted playsinline></video>
         </div>
-        <div class="actions center">
-          <span id="call-clock">Connecting...</span>
-          <button id="mute-call" class="secondary">Mute mic</button>
-          <button id="camera-call" class="secondary">Camera off</button>
-          <button id="hangup-call" class="danger">Hang up</button>
+
+        <div class="call-stage-footer">
+          <span id="call-clock">Connecting…</span>
+          <button id="mute-call" type="button" class="call-btn">Mute mic</button>
+          <button id="camera-call" type="button" class="call-btn">Camera off</button>
+          <button id="hangup-call" type="button" class="danger">Hang up</button>
         </div>
       </section>
 
       <section id="messages" class="messages">
         <div class="welcome">
-          <h2>Your conversations start here.</h2>
-          <p>Choose someone to chat, share files, or call.</p>
+          <div class="welcome-icon">✦</div>
+          <h2>Your conversations start here</h2>
+          <p>
+            Choose a person to send a message, share a file,
+            or start a voice/video call.
+          </p>
         </div>
       </section>
 
-      <div id="typing-indicator" class="typing hidden">Typing...</div>
+      <div id="typing-indicator" class="typing-indicator hidden">
+        Typing…
+      </div>
 
       <form id="message-form" class="composer">
-        <label for="file-input" class="attach" title="Attach file">＋</label>
-        <input id="file-input" type="file" hidden>
-        <textarea id="message-input" rows="1"
-                  placeholder="Write a message..." maxlength="5000" disabled></textarea>
-        <button id="send-button" class="primary" disabled>Send ➤</button>
+        <label
+          class="attach-btn"
+          for="file-input"
+          title="Attach a file"
+          aria-label="Attach a file"
+        >＋</label>
+
+        <input id="file-input" type="file" class="hidden" accept="*/*">
+
+        <textarea
+          id="message-input"
+          rows="1"
+          maxlength="5000"
+          placeholder="Write a message…"
+          disabled
+        ></textarea>
+
+        <button id="send-button" class="primary send-btn" type="submit" disabled>
+          Send <span>➤</span>
+        </button>
       </form>
 
-      <p class="hint">
-        Calls require camera/microphone permission. Use HTTPS and allow access
-        when your browser asks.
+      <p class="composer-hint">
+        Files are shared only with members of this conversation.
+        Calls need camera/microphone permission and HTTPS.
       </p>
     </section>
   </main>
-
-  <dialog id="profile-dialog">
-    <form id="profile-form">
-      <h2>Edit profile</h2>
-      <label>Display name
-        <input name="display_name" required maxlength="60">
-      </label>
-      <label>Username
-        <input name="username" required minlength="3" maxlength="24"
-               pattern="[A-Za-z0-9_]+">
-      </label>
-      <label>Bio
-        <textarea name="bio" maxlength="300"></textarea>
-      </label>
-      <div class="actions">
-        <button type="button" id="close-profile" class="secondary">Cancel</button>
-        <button class="primary">Save</button>
-      </div>
-    </form>
-  </dialog>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config/config.js"></script>
