@@ -1,6 +1,6 @@
 window.TALKATCH_CONFIG = {
-  supabaseUrl: "https://bpfbutcrckutvkaezhfr.supabase.co",
-  supabaseAnonKey: "PASTE_YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY",
+  supabaseUrl: "https://vwkqpaedwcyuzbrxfjay.supabase.co",
+  supabaseAnonKey: "sb_publishable_omRb85F89tssTvT_EsfZMw_Ahodymyg",
 
   maxFileBytes: 15 * 1024 * 1024,
 
