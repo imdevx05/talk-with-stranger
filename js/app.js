@@ -1,1247 +1,942 @@
 (() => {
   "use strict";
 
-  const $ = (selector, root = document) => root.querySelector(selector);
-  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  const cfg = window.TALKATCH_CONFIG || {};
+  const $ = (s, root = document) => root.querySelector(s);
 
-  const config = window.TALKATCH_CONFIG || {};
-  const authScreen = $("#auth-screen");
-  const appScreen = $("#app-screen");
-  const authForm = $("#auth-form");
-  const authMessage = $("#auth-message");
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
 
-  let supabase = null;
-  let currentUser = null;
-  let currentProfile = null;
-  let authMode = "login";
-  let activeConversation = null;
-  let activeRecipient = null;
-  let selectedPostImage = null;
-  let selectedAvatar = null;
+  const avatar = p => p?.avatar_url ||
+    `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(
+      p?.display_name || p?.username || "Member"
+    )}`;
+
+  const time = d => {
+    const date = new Date(d);
+    return Number.isNaN(date.getTime()) ? "" :
+      date.toLocaleString([], {
+        month: "short", day: "numeric",
+        hour: "numeric", minute: "2-digit"
+      });
+  };
+
+  const size = n => n < 1048576
+    ? `${(n / 1024).toFixed(1)} KB`
+    : `${(n / 1048576).toFixed(1)} MB`;
+
+  let db;
+  let user = null;
+  let profile = null;
+  let people = [];
+  let activePerson = null;
+  let messages = [];
+  let messageChannel = null;
+  let peopleChannel = null;
+  let incomingChannel = null;
+  let callChannel = null;
+  let pc = null;
+  let localStream = null;
+  let remoteStream = null;
+  let currentCall = null;
+  let incomingCall = null;
+  let callStartedAt = null;
+  let callTimer = null;
   let toastTimer = null;
-  let feedRequest = 0;
-
-  const escapeHTML = (value) =>
-    String(value ?? "").replace(/[&<>"']/g, (char) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    })[char]);
-
-  const fallbackAvatar = (name) =>
-    "https://api.dicebear.com/9.x/initials/svg?seed=" +
-    encodeURIComponent(name || "User");
-
-  function avatarFor(profile) {
-    return profile?.avatar_url || fallbackAvatar(
-      profile?.display_name || profile?.username || "User"
-    );
-  }
+  let sending = false;
 
   function toast(message, error = false) {
     const el = $("#toast");
-    if (!el) return;
-
     el.textContent = message;
     el.classList.toggle("error", error);
-    el.classList.add("show");
-
+    el.classList.remove("hidden");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove("show"), 3500);
+    toastTimer = setTimeout(() => el.classList.add("hidden"), 4500);
   }
 
-  function setStatus(element, message, kind = "") {
-    if (!element) return;
-    element.textContent = message;
-    element.classList.remove("error", "success");
-    if (kind) element.classList.add(kind);
+  function authMessage(message, error = false) {
+    const el = $("#auth-message");
+    el.textContent = message;
+    el.classList.toggle("error", error);
+    el.classList.remove("hidden");
   }
 
-  function renderIcons() {
-    if (window.lucide) window.lucide.createIcons();
+  function showAuth() {
+    $("#app-view").classList.add("hidden");
+    $("#auth-view").classList.remove("hidden");
   }
 
-  function setTheme(theme) {
-    const light = theme === "light";
-    document.documentElement.dataset.theme = light ? "light" : "dark";
-
-    [$("#theme-toggle")].filter(Boolean).forEach((button) => {
-      button.setAttribute("aria-checked", String(light));
-    });
-
-    localStorage.setItem("talkatch-theme", light ? "light" : "dark");
+  function showApp() {
+    $("#auth-view").classList.add("hidden");
+    $("#app-view").classList.remove("hidden");
   }
 
-  function toggleTheme() {
-    setTheme(
-      document.documentElement.dataset.theme === "light"
-        ? "dark"
-        : "light"
+  function showTab(tab) {
+    document.querySelectorAll("[data-tab]").forEach(b =>
+      b.classList.toggle("active", b.dataset.tab === tab)
     );
+    $("#login-form").classList.toggle("hidden", tab !== "login");
+    $("#signup-form").classList.toggle("hidden", tab !== "signup");
+    $("#auth-title")?.replaceChildren(
+      document.createTextNode(tab === "login" ? "Welcome back" : "Join TALKATCH")
+    );
+    $("#auth-message").classList.add("hidden");
   }
 
-  function initializeTheme() {
-    const saved = localStorage.getItem("talkatch-theme");
-    setTheme(saved || "dark");
-
-    $("#theme-toggle")?.addEventListener("click", toggleTheme);
-    $("#mobile-theme-toggle")?.addEventListener("click", toggleTheme);
-  }
-
-  function setAuthMode(mode) {
-    authMode = mode === "signup" ? "signup" : "login";
-
-    $$(".auth-tab").forEach((button) => {
-      button.classList.toggle("active", button.dataset.mode === authMode);
+  async function login(form) {
+    const data = new FormData(form);
+    const { error } = await db.auth.signInWithPassword({
+      email: data.get("email").trim(),
+      password: data.get("password")
     });
 
-    $("#auth-title").textContent =
-      authMode === "signup" ? "Join the community" : "Welcome back";
-
-    $("#auth-description").textContent =
-      authMode === "signup"
-        ? "Create your account and meet your people."
-        : "Sign in to continue to TALKATCH.";
-
-    $("#name-field").classList.toggle("hidden", authMode !== "signup");
-    $("#username-field").classList.toggle("hidden", authMode !== "signup");
-
-    const username = authForm.elements.username;
-    const displayName = authForm.elements.display_name;
-
-    username.required = authMode === "signup";
-    displayName.required = authMode === "signup";
-
-    authForm.elements.password.autocomplete =
-      authMode === "signup" ? "new-password" : "current-password";
-
-    $("#auth-submit").innerHTML =
-      authMode === "signup"
-        ? 'Create account <i data-lucide="arrow-right"></i>'
-        : 'Continue <i data-lucide="arrow-right"></i>';
-
-    setStatus(authMessage, "");
-    renderIcons();
+    if (error) return authMessage(error.message, true);
+    authMessage("Signed in successfully.");
   }
 
-  function showAuthenticatedApp() {
-    authScreen.classList.add("hidden");
-    appScreen.classList.remove("hidden");
+  async function signup(form) {
+    const data = new FormData(form);
+    const username = String(data.get("username")).trim().toLowerCase();
+
+    if (!/^[a-z0-9_]{3,24}$/.test(username)) {
+      return authMessage(
+        "Username must be 3–24 letters, numbers, or underscores.", true
+      );
+    }
+
+    const { data: result, error } = await db.auth.signUp({
+      email: String(data.get("email")).trim(),
+      password: data.get("password"),
+      options: {
+        data: {
+          username,
+          display_name: String(data.get("display_name")).trim()
+        },
+        emailRedirectTo: location.origin
+      }
+    });
+
+    if (error) return authMessage(error.message, true);
+
+    if (result.session) {
+      await startApp(result.user);
+    } else {
+      authMessage(
+        "Account created. Check your email and confirm your account before logging in."
+      );
+    }
   }
 
-  function showAuthentication() {
-    appScreen.classList.add("hidden");
-    authScreen.classList.remove("hidden");
-    setAuthMode("login");
+  async function resetPassword() {
+    const email = $("#login-form").elements.email.value.trim();
+    if (!email) return authMessage("Enter your email first.", true);
+
+    const { error } = await db.auth.resetPasswordForEmail(email, {
+      redirectTo: location.origin
+    });
+
+    if (error) return authMessage(error.message, true);
+    authMessage("If the email is registered, a password-reset link will be sent.");
   }
 
-  async function ensureProfile(user) {
-    const { data: existing, error } = await supabase
+  async function ensureProfile(authUser) {
+    const meta = authUser.user_metadata || {};
+    const username = String(meta.username ||
+      authUser.email?.split("@")[0] || "member")
+      .toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 24) || "member";
+
+    const { data: existing, error: readError } = await db
       .from("profiles")
       .select("*")
-      .eq("id", user.id)
+      .eq("id", authUser.id)
       .maybeSingle();
 
-    if (error) throw error;
+    if (readError) throw readError;
     if (existing) return existing;
 
-    const metadata = user.user_metadata || {};
-    const base = String(
-      metadata.username || user.email?.split("@")[0] || "member"
-    ).toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 20) || "member";
-
-    let username = base;
-
-    const { data: taken } = await supabase
-      .from("profiles")
-      .select("username")
-      .eq("username", username)
-      .maybeSingle();
-
-    if (taken) {
-      username = `${base}_${user.id.slice(0, 6)}`;
-    }
-
-    const profile = {
-      id: user.id,
+    const { data, error } = await db.from("profiles").insert({
+      id: authUser.id,
       username,
-      display_name: metadata.display_name || username,
-      bio: "",
-      avatar_url: null
-    };
+      display_name: meta.display_name || username
+    }).select("*").single();
 
-    const { data, error: insertError } = await supabase
-      .from("profiles")
-      .insert(profile)
-      .select()
-      .single();
-
-    if (insertError) throw insertError;
+    if (error) throw error;
     return data;
   }
 
-  async function refreshProfile() {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", currentUser.id)
-      .single();
-
-    if (error) throw error;
-
-    currentProfile = data;
-    updateAccountUI();
-    fillProfileForm();
-    return data;
-  }
-
-  function updateAccountUI() {
-    const avatar = avatarFor(currentProfile);
-    const name = currentProfile?.display_name || "Community member";
-    const username = currentProfile?.username || "member";
-
-    $("#sidebar-avatar").src = avatar;
-    $("#composer-avatar").src = avatar;
-    $("#sidebar-name").textContent = name;
-    $("#sidebar-username").textContent = "@" + username;
-  }
-
-  function fillProfileForm() {
-    const form = $("#profile-form");
-    if (!form || !currentProfile) return;
-
-    form.elements.display_name.value = currentProfile.display_name || "";
-    form.elements.username.value = currentProfile.username || "";
-    form.elements.bio.value = currentProfile.bio || "";
-    $("#profile-preview").src = avatarFor(currentProfile);
-  }
-
-  function friendlyError(error) {
-    const message = error?.message || "Something went wrong.";
-
-    if (/duplicate key|unique constraint/i.test(message)) {
-      return "That username is already taken. Choose another one.";
-    }
-
-    if (/row-level security|permission denied/i.test(message)) {
-      return "Supabase blocked this action. Check your table permissions and RLS policies.";
-    }
-
-    if (/invalid login credentials/i.test(message)) {
-      return "Incorrect email or password.";
-    }
-
-    if (/email not confirmed/i.test(message)) {
-      return "Confirm your email using the link sent to your inbox.";
-    }
-
-    return message;
-  }
-
-  async function handleAuthSubmit(event) {
-    event.preventDefault();
-
-    const form = event.currentTarget;
-    const email = form.elements.email.value.trim();
-    const password = form.elements.password.value;
-    const submit = $("#auth-submit");
-
-    submit.disabled = true;
-    setStatus(authMessage, "Please wait…");
+  async function startApp(authUser) {
+    user = authUser;
 
     try {
-      if (authMode === "signup") {
-        const username = form.elements.username.value.trim().toLowerCase();
-        const displayName = form.elements.display_name.value.trim();
-
-        if (!/^[a-z0-9_]{3,24}$/.test(username)) {
-          throw new Error("Username must be 3–24 characters using letters, numbers, or underscores.");
-        }
-
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              username,
-              display_name: displayName
-            },
-            emailRedirectTo: window.location.origin
-          }
-        });
-
-        if (error) throw error;
-
-        if (data.session && data.user) {
-          currentUser = data.user;
-          currentProfile = await ensureProfile(currentUser);
-          await enterApp();
-        } else {
-          setStatus(
-            authMessage,
-            "Account submitted. Check your email and click the confirmation link before logging in.",
-            "success"
-          );
-        }
-      } else {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password
-        });
-
-        if (error) throw error;
-
-        currentUser = data.user;
-        await enterApp();
-      }
-    } catch (error) {
-      setStatus(authMessage, friendlyError(error), "error");
-    } finally {
-      submit.disabled = false;
+      profile = await ensureProfile(user);
+      showApp();
+      paintMyProfile();
+      await loadPeople();
+      subscribePeople();
+      subscribeIncomingCalls();
+    } catch (e) {
+      console.error(e);
+      toast("Profile setup failed: " + e.message, true);
     }
   }
 
-  async function enterApp() {
-    showAuthenticatedApp();
-
-    try {
-      currentProfile = await ensureProfile(currentUser);
-      await refreshProfile();
-    } catch (error) {
-      toast("Unable to load profile: " + friendlyError(error), true);
-    }
-
-    await Promise.allSettled([
-      loadFeed(),
-      loadPeople(),
-      loadNotifications(),
-      loadMyPosts(),
-      loadConversations()
-    ]);
-
-    switchView("feed");
-  }
-
-  async function logout() {
-    const { error } = await supabase.auth.signOut();
-
-    if (error) {
-      toast(friendlyError(error), true);
-      return;
-    }
-
-    currentUser = null;
-    currentProfile = null;
-    activeConversation = null;
-    activeRecipient = null;
-
-    showAuthentication();
-  }
-
-  function switchView(view) {
-    const valid = ["feed", "explore", "notifications", "profile", "messages"];
-    if (!valid.includes(view)) view = "feed";
-
-    $$(".view").forEach((element) => element.classList.add("hidden"));
-    $("#view-" + view)?.classList.remove("hidden");
-
-    $$(".nav-item[data-view]").forEach((button) => {
-      button.classList.toggle("active", button.dataset.view === view);
-    });
-
-    if (view === "feed") loadFeed();
-    if (view === "explore") loadPeople();
-    if (view === "notifications") loadNotifications();
-    if (view === "profile") loadMyPosts();
-    if (view === "messages") loadConversations();
-  }
-
-  function timeAgo(date) {
-    const seconds = Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 1000));
-
-    if (seconds < 60) return "Just now";
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-    if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
-
-    return new Date(date).toLocaleDateString();
-  }
-
-  async function uploadImage(file, folder) {
-    if (!file) return null;
-
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      throw new Error("Choose a JPG, PNG, or WebP image.");
-    }
-
-    if (file.size > 3 * 1024 * 1024) {
-      throw new Error("Image must be 3 MB or smaller.");
-    }
-
-    const extension = file.type === "image/png"
-      ? "png"
-      : file.type === "image/webp" ? "webp" : "jpg";
-
-    const path = `${currentUser.id}/${folder}-${crypto.randomUUID()}.${extension}`;
-
-    const { error } = await supabase.storage
-      .from("talkatch-media")
-      .upload(path, file, { upsert: false, contentType: file.type });
-
-    if (error) throw error;
-
-    const { data } = supabase.storage
-      .from("talkatch-media")
-      .getPublicUrl(path);
-
-    return data.publicUrl;
-  }
-
-  async function handlePostSubmit(event) {
-    event.preventDefault();
-
-    if (!currentUser) return;
-
-    const form = event.currentTarget;
-    const content = form.elements.content.value.trim();
-    const submit = form.querySelector('button[type="submit"]');
-
-    if (!content && !selectedPostImage) {
-      toast("Write something or attach a photo.", true);
-      return;
-    }
-
-    submit.disabled = true;
-
-    try {
-      let imageUrl = null;
-
-      if (selectedPostImage) {
-        imageUrl = await uploadImage(selectedPostImage, "post");
-      }
-
-      const { error } = await supabase.from("posts").insert({
-        user_id: currentUser.id,
-        content,
-        image_url: imageUrl
-      });
-
-      if (error) throw error;
-
-      form.reset();
-      selectedPostImage = null;
-      $("#post-image-preview").classList.add("hidden");
-      $("#post-image-preview").replaceChildren();
-
-      toast("Your post has been published.");
-      await loadFeed();
-      await loadMyPosts();
-    } catch (error) {
-      toast("Unable to publish: " + friendlyError(error), true);
-    } finally {
-      submit.disabled = false;
-    }
-  }
-
-  async function loadFeed() {
-    const container = $("#feed-list");
-    if (!container || !currentUser) return;
-
-    const request = ++feedRequest;
-    container.innerHTML = '<div class="empty-state">Loading posts…</div>';
-
-    try {
-      const { data: posts, error } = await supabase
-        .from("posts")
-        .select("id,user_id,content,image_url,created_at")
-        .order("created_at", { ascending: false })
-        .limit(50);
-
-      if (error) throw error;
-      if (request !== feedRequest) return;
-
-      if (!posts?.length) {
-        container.innerHTML = '<div class="empty-state"><h3>Your feed starts here</h3><p>Be the first to share a moment.</p></div>';
-        return;
-      }
-
-      const userIds = [...new Set(posts.map((post) => post.user_id))];
-      const postIds = posts.map((post) => post.id);
-
-      const [profilesResult, likesResult, commentsResult] = await Promise.all([
-        supabase.from("profiles").select("id,username,display_name,avatar_url").in("id", userIds),
-        supabase.from("likes").select("post_id,user_id").in("post_id", postIds),
-        supabase.from("comments").select("id,post_id,user_id,content,created_at").in("post_id", postIds).order("created_at", { ascending: true })
-      ]);
-
-      if (request !== feedRequest) return;
-
-      if (profilesResult.error) throw profilesResult.error;
-      if (likesResult.error) throw likesResult.error;
-      if (commentsResult.error) throw commentsResult.error;
-
-      const profiles = Object.fromEntries((profilesResult.data || []).map((profile) => [profile.id, profile]));
-      const likes = likesResult.data || [];
-      const comments = commentsResult.data || [];
-
-      const commentUserIds = [...new Set(comments.map((comment) => comment.user_id))];
-      let commentProfiles = {};
-
-      if (commentUserIds.length) {
-        const { data, error: commentProfileError } = await supabase
-          .from("profiles")
-          .select("id,username,display_name,avatar_url")
-          .in("id", commentUserIds);
-
-        if (commentProfileError) throw commentProfileError;
-        commentProfiles = Object.fromEntries((data || []).map((profile) => [profile.id, profile]));
-      }
-
-      container.innerHTML = posts.map((post) => {
-        const profile = profiles[post.user_id] || {};
-        const postLikes = likes.filter((like) => like.post_id === post.id);
-        const liked = postLikes.some((like) => like.user_id === currentUser.id);
-        const postComments = comments.filter((comment) => comment.post_id === post.id);
-
-        return `
-          <article class="post-card card" data-post-id="${escapeHTML(post.id)}">
-            <header class="post-author">
-              <img class="avatar" src="${escapeHTML(avatarFor(profile))}" alt="">
-              <div class="post-author-info">
-                <strong>${escapeHTML(profile.display_name || "Community member")}</strong>
-                <small>@${escapeHTML(profile.username || "member")}</small>
-              </div>
-              <time class="post-time">${escapeHTML(timeAgo(post.created_at))}</time>
-            </header>
-
-            ${post.content ? `<div class="post-content">${escapeHTML(post.content)}</div>` : ""}
-            ${post.image_url ? `<img class="post-image" src="${escapeHTML(post.image_url)}" alt="Post image" loading="lazy">` : ""}
-
-            <div class="post-actions">
-              <button class="post-action ${liked ? "liked" : ""}" data-action="like" data-id="${escapeHTML(post.id)}">
-                <i data-lucide="${liked ? "heart" : "heart"}"></i> ${postLikes.length}
-              </button>
-              <button class="post-action" data-action="focus-comment" data-id="${escapeHTML(post.id)}">
-                <i data-lucide="message-circle"></i> ${postComments.length} comments
-              </button>
-              ${post.user_id === currentUser.id ? `<button class="post-action" data-action="delete-post" data-id="${escapeHTML(post.id)}"><i data-lucide="trash-2"></i> Delete</button>` : ""}
-            </div>
-
-            <div class="comments">
-              <div class="comment-list">
-                ${postComments.map((comment) => {
-                  const commenter = commentProfiles[comment.user_id] || {};
-                  return `
-                    <div class="comment">
-                      <img class="avatar" src="${escapeHTML(avatarFor(commenter))}" alt="">
-                      <div class="comment-bubble">
-                        <strong>${escapeHTML(commenter.display_name || "Member")}</strong>
-                        <span>${escapeHTML(comment.content)}</span>
-                      </div>
-                    </div>`;
-                }).join("")}
-              </div>
-
-              <form class="comment-form" data-post-id="${escapeHTML(post.id)}">
-                <input name="content" maxlength="1000" required placeholder="Write a comment…" aria-label="Write a comment">
-                <button type="submit" aria-label="Submit comment"><i data-lucide="send"></i></button>
-              </form>
-            </div>
-          </article>`;
-      }).join("");
-
-      renderIcons();
-    } catch (error) {
-      console.error("TALKATCH feed error:", error);
-      container.innerHTML = `
-        <div class="empty-state">
-          <h3>Unable to load posts</h3>
-          <p>${escapeHTML(friendlyError(error))}</p>
-          <p>Confirm that the SQL setup has been run and the table columns match the app.</p>
-        </div>`;
-    }
-  }
-
-  async function handlePostAction(event) {
-    const button = event.target.closest("[data-action]");
-    if (!button) return;
-
-    const id = button.dataset.id;
-    const action = button.dataset.action;
-
-    try {
-      if (action === "like") {
-        const { data: existing, error: lookupError } = await supabase
-          .from("likes")
-          .select("post_id")
-          .eq("post_id", id)
-          .eq("user_id", currentUser.id)
-          .maybeSingle();
-
-        if (lookupError) throw lookupError;
-
-        if (existing) {
-          const { error } = await supabase.from("likes")
-            .delete().eq("post_id", id).eq("user_id", currentUser.id);
-          if (error) throw error;
-        } else {
-          const { error } = await supabase.from("likes").insert({
-            post_id: id,
-            user_id: currentUser.id
-          });
-          if (error) throw error;
-        }
-
-        await loadFeed();
-      }
-
-      if (action === "focus-comment") {
-        const input = document.querySelector(
-          `.comment-form[data-post-id="${CSS.escape(id)}"] input`
-        );
-        input?.focus();
-      }
-
-      if (action === "delete-post") {
-        if (!confirm("Delete this post?")) return;
-
-        const { error } = await supabase.from("posts")
-          .delete().eq("id", id).eq("user_id", currentUser.id);
-
-        if (error) throw error;
-
-        toast("Post deleted.");
-        await loadFeed();
-        await loadMyPosts();
-      }
-    } catch (error) {
-      toast(friendlyError(error), true);
-    }
-  }
-
-  async function handleCommentSubmit(event) {
-    const form = event.target.closest(".comment-form");
-    if (!form) return;
-
-    event.preventDefault();
-
-    const content = form.elements.content.value.trim();
-    if (!content) return;
-
-    try {
-      const { error } = await supabase.from("comments").insert({
-        post_id: form.dataset.postId,
-        user_id: currentUser.id,
-        content
-      });
-
-      if (error) throw error;
-
-      await loadFeed();
-      toast("Comment added.");
-    } catch (error) {
-      toast("Unable to comment: " + friendlyError(error), true);
-    }
-  }
-
-  async function loadMyPosts() {
-    const container = $("#my-posts");
-    if (!container || !currentUser) return;
-
-    container.innerHTML = '<div class="empty-state">Loading your posts…</div>';
-
-    try {
-      const { data, error } = await supabase.from("posts")
-        .select("id,user_id,content,image_url,created_at")
-        .eq("user_id", currentUser.id)
-        .order("created_at", { ascending: false })
-        .limit(50);
-
-      if (error) throw error;
-
-      if (!data?.length) {
-        container.innerHTML = '<div class="empty-state">You have not published anything yet.</div>';
-        return;
-      }
-
-      container.innerHTML = data.map((post) => `
-        <article class="post-card card">
-          <div class="post-author">
-            <img class="avatar" src="${escapeHTML(avatarFor(currentProfile))}" alt="">
-            <div class="post-author-info">
-              <strong>${escapeHTML(currentProfile?.display_name || "You")}</strong>
-              <small>@${escapeHTML(currentProfile?.username || "")}</small>
-            </div>
-            <time class="post-time">${escapeHTML(timeAgo(post.created_at))}</time>
-          </div>
-          ${post.content ? `<div class="post-content">${escapeHTML(post.content)}</div>` : ""}
-          ${post.image_url ? `<img class="post-image" src="${escapeHTML(post.image_url)}" alt="Your post" loading="lazy">` : ""}
-        </article>
-      `).join("");
-    } catch (error) {
-      container.innerHTML = `<div class="empty-state">${escapeHTML(friendlyError(error))}</div>`;
-    }
-
-    renderIcons();
+  function paintMyProfile() {
+    $("#my-avatar").src = avatar(profile);
+    $("#my-name").textContent = profile.display_name || profile.username;
+    $("#my-handle").textContent = "@" + profile.username;
   }
 
   async function loadPeople() {
-    const container = $("#people-list");
-    if (!container || !currentUser) return;
+    if (!user) return;
 
-    container.innerHTML = '<div class="empty-state">Discovering community members…</div>';
+    const { data, error } = await db.from("profiles")
+      .select("id,username,display_name,bio,avatar_url,created_at")
+      .neq("id", user.id)
+      .order("display_name")
+      .limit(500);
 
-    try {
-      const query = ($("#people-search")?.value || "").trim();
-
-      let request = supabase.from("profiles")
-        .select("id,username,display_name,bio,avatar_url,created_at")
-        .neq("id", currentUser.id)
-        .order("created_at", { ascending: false })
-        .limit(100);
-
-      if (query) {
-        request = request.or(
-          `username.ilike.%${query.replace(/[%_,()]/g, "")}%,display_name.ilike.%${query.replace(/[%_,()]/g, "")}%`
-        );
-      }
-
-      const [{ data: people, error }, { data: following, error: followError }] = await Promise.all([
-        request,
-        supabase.from("follows").select("following_id").eq("follower_id", currentUser.id)
-      ]);
-
-      if (error) throw error;
-      if (followError) throw followError;
-
-      const followed = new Set((following || []).map((row) => row.following_id));
-
-      if (!people?.length) {
-        container.innerHTML = '<div class="empty-state">No other community members found yet. Invite a friend to join!</div>';
-        renderSuggested([]);
-        return;
-      }
-
-      container.innerHTML = people.map((person) => `
-        <article class="person-card card">
-          <img class="avatar" src="${escapeHTML(avatarFor(person))}" alt="">
-          <h3>${escapeHTML(person.display_name || "Community member")}</h3>
-          <p>@${escapeHTML(person.username || "member")}<br>${escapeHTML(person.bio || "A member of TALKATCH.")}</p>
-          <button class="follow-button ${followed.has(person.id) ? "following" : ""}"
-            data-follow="${escapeHTML(person.id)}"
-            data-following="${followed.has(person.id)}">
-            ${followed.has(person.id) ? "Following" : "Follow"}
-          </button>
-          <button class="post-action" data-message-user="${escapeHTML(person.id)}">
-            <i data-lucide="message-circle"></i> Message
-          </button>
-        </article>
-      `).join("");
-
-      renderSuggested(people.slice(0, 5), followed);
-      renderIcons();
-    } catch (error) {
-      console.error("People load error:", error);
-      container.innerHTML = `<div class="empty-state">Unable to load users: ${escapeHTML(friendlyError(error))}</div>`;
-    }
-  }
-
-  function renderSuggested(people, followed = new Set()) {
-    const container = $("#suggested-list");
-    if (!container) return;
-
-    if (!people?.length) {
-      container.innerHTML = '<p>No suggestions yet. Invite people to join.</p>';
+    if (error) {
+      console.error(error);
+      toast("Unable to load people: " + error.message, true);
       return;
     }
 
-    container.innerHTML = people.slice(0, 5).map((person) => `
-      <div class="suggested-user">
-        <img class="avatar" src="${escapeHTML(avatarFor(person))}" alt="">
-        <span class="suggested-info">
-          <strong>${escapeHTML(person.display_name || "Community member")}</strong>
-          <small>@${escapeHTML(person.username || "member")}</small>
+    people = data || [];
+    renderPeople();
+  }
+
+  function renderPeople() {
+    const query = $("#user-search").value.trim().toLowerCase();
+    const list = $("#people-list");
+
+    const filtered = people.filter(p =>
+      `${p.username} ${p.display_name} ${p.bio || ""}`
+        .toLowerCase().includes(query)
+    );
+
+    if (!filtered.length) {
+      list.innerHTML = '<p class="muted">No people found.</p>';
+      return;
+    }
+
+    list.innerHTML = filtered.map(p => `
+      <button class="person ${activePerson?.id === p.id ? "active" : ""}"
+              type="button" data-person="${esc(p.id)}">
+        <img src="${esc(avatar(p))}" alt="">
+        <span class="grow">
+          <strong>${esc(p.display_name || p.username)}</strong>
+          <small>@${esc(p.username)}</small>
         </span>
-        <button class="follow-button ${followed.has(person.id) ? "following" : ""}"
-          data-follow="${escapeHTML(person.id)}"
-          data-following="${followed.has(person.id)}">
-          ${followed.has(person.id) ? "Following" : "Follow"}
-        </button>
-      </div>
+      </button>
     `).join("");
-
-    renderIcons();
   }
 
-  async function handleFollowClick(event) {
-    const button = event.target.closest("[data-follow]");
-    if (!button) return;
+  function subscribePeople() {
+    if (peopleChannel) db.removeChannel(peopleChannel);
 
-    const targetId = button.dataset.follow;
-    const alreadyFollowing = button.dataset.following === "true";
+    peopleChannel = db.channel("talkatch-profiles")
+      .on("postgres_changes", {
+        event: "*", schema: "public", table: "profiles"
+      }, () => loadPeople())
+      .subscribe();
+  }
 
-    try {
-      if (alreadyFollowing) {
-        const { error } = await supabase.from("follows")
-          .delete().eq("follower_id", currentUser.id).eq("following_id", targetId);
-        if (error) throw error;
-        toast("You unfollowed this user.");
-      } else {
-        const { error } = await supabase.from("follows").insert({
-          follower_id: currentUser.id,
-          following_id: targetId
-        });
-        if (error) throw error;
+  async function openPerson(id) {
+    const person = people.find(p => p.id === id);
+    if (!person) return;
 
-        const { error: notificationError } = await supabase.from("notifications").insert({
-          user_id: targetId,
-          actor_id: currentUser.id,
-          type: "follow",
-          message: `${currentProfile?.display_name || "Someone"} started following you.`
-        });
+    activePerson = person;
+    renderPeople();
 
-        if (notificationError) console.warn("Follow notification:", notificationError.message);
-        toast("You are now following this user.");
-      }
+    $("#chat-title").textContent = person.display_name || person.username;
+    $("#chat-subtitle").textContent = "@" + person.username;
+    $("#chat-avatar").src = avatar(person);
 
-      await Promise.allSettled([loadPeople(), loadNotifications()]);
-    } catch (error) {
-      toast(friendlyError(error), true);
+    $("#message-input").disabled = false;
+    $("#send-button").disabled = false;
+    $("#file-input").disabled = false;
+    $("#voice-call").disabled = false;
+    $("#video-call").disabled = false;
+    $("#message-input").placeholder =
+      `Message ${person.display_name || person.username}...`;
+
+    if (messageChannel) {
+      await db.removeChannel(messageChannel);
+      messageChannel = null;
     }
+
+    await loadMessages();
+    subscribeMessages();
   }
 
-  async function handleProfileSave(event) {
-    event.preventDefault();
+  async function loadMessages() {
+    if (!activePerson || !user) return;
 
-    const form = event.currentTarget;
-    const displayName = form.elements.display_name.value.trim();
-    const username = form.elements.username.value.trim().toLowerCase();
-    const bio = form.elements.bio.value.trim();
+    const { data, error } = await db.from("messages")
+      .select("id,sender_id,receiver_id,content,attachment_path,attachment_name,attachment_type,attachment_size,created_at")
+      .or(
+        `and(sender_id.eq.${user.id},receiver_id.eq.${activePerson.id}),` +
+        `and(sender_id.eq.${activePerson.id},receiver_id.eq.${user.id})`
+      )
+      .order("created_at", { ascending: true })
+      .limit(300);
 
-    if (!/^[a-z0-9_]{3,24}$/.test(username)) {
-      setStatus($("#profile-message"), "Username must be 3–24 characters using letters, numbers, or underscores.", "error");
+    if (error) {
+      console.error(error);
+      toast("Unable to load messages: " + error.message, true);
       return;
     }
 
-    const submit = form.querySelector('button[type="submit"]');
-    submit.disabled = true;
-
-    try {
-      let avatarUrl = currentProfile?.avatar_url || null;
-
-      if (selectedAvatar) {
-        avatarUrl = await uploadImage(selectedAvatar, "avatar");
-      }
-
-      const { data, error } = await supabase.from("profiles")
-        .update({
-          display_name: displayName,
-          username,
-          bio,
-          avatar_url: avatarUrl
-        })
-        .eq("id", currentUser.id)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      currentProfile = data;
-      selectedAvatar = null;
-      updateAccountUI();
-      fillProfileForm();
-
-      setStatus($("#profile-message"), "Profile saved successfully.", "success");
-      toast("Profile updated.");
-      await loadMyPosts();
-    } catch (error) {
-      setStatus($("#profile-message"), friendlyError(error), "error");
-    } finally {
-      submit.disabled = false;
-    }
+    messages = data || [];
+    await renderMessages();
   }
 
-  async function loadNotifications() {
-    const container = $("#notifications-list");
-    if (!container || !currentUser) return;
+  function subscribeMessages() {
+    const peerId = activePerson.id;
 
-    container.innerHTML = '<div class="empty-state">Loading notifications…</div>';
+    messageChannel = db.channel(
+      `messages:${[user.id, peerId].sort().join(":")}`
+    ).on("postgres_changes", {
+      event: "INSERT", schema: "public", table: "messages"
+    }, async payload => {
+      const m = payload.new;
 
-    try {
-      const { data, error } = await supabase.from("notifications")
-        .select("*")
-        .eq("user_id", currentUser.id)
-        .order("created_at", { ascending: false })
-        .limit(50);
+      if (!activePerson || activePerson.id !== peerId) return;
 
-      if (error) throw error;
+      const relevant =
+        (m.sender_id === user.id && m.receiver_id === peerId) ||
+        (m.sender_id === peerId && m.receiver_id === user.id);
 
-      if (!data?.length) {
-        container.innerHTML = '<div class="empty-state">You are all caught up.</div>';
-        return;
+      if (relevant && !messages.some(x => x.id === m.id)) {
+        messages.push(m);
+        messages.sort((a, b) =>
+          new Date(a.created_at) - new Date(b.created_at)
+        );
+        await renderMessages();
       }
-
-      container.innerHTML = data.map((notification) => `
-        <article class="notification-item">
-          <span class="notification-icon"><i data-lucide="${notification.type === "follow" ? "user-round-plus" : "bell"}"></i></span>
-          <div>
-            <p>${escapeHTML(notification.message || "You have a new notification.")}</p>
-            <small>${escapeHTML(timeAgo(notification.created_at))}</small>
-          </div>
-        </article>
-      `).join("");
-
-      renderIcons();
-    } catch (error) {
-      console.error("Notifications error:", error);
-      container.innerHTML = `<div class="empty-state">Unable to load notifications: ${escapeHTML(friendlyError(error))}</div>`;
-    }
+    }).subscribe();
   }
 
-  async function loadConversations() {
-    const container = $("#conversation-list");
-    if (!container || !currentUser) return;
+  async function renderMessages() {
+    const box = $("#messages");
 
-    container.innerHTML = '<div class="empty-state">Loading…</div>';
-
-    try {
-      const { data: memberships, error } = await supabase
-        .from("conversation_members")
-        .select("conversation_id")
-        .eq("user_id", currentUser.id);
-
-      if (error) throw error;
-
-      const ids = [...new Set((memberships || []).map((row) => row.conversation_id))];
-
-      if (!ids.length) {
-        container.innerHTML = '<div class="empty-state">No conversations yet.<p>Find someone in Explore people and select Message.</p></div>';
-        return;
-      }
-
-      const { data: members, error: membersError } = await supabase
-        .from("conversation_members")
-        .select("conversation_id,user_id")
-        .in("conversation_id", ids);
-
-      if (membersError) throw membersError;
-
-      const otherIds = [...new Set((members || [])
-        .filter((row) => row.user_id !== currentUser.id)
-        .map((row) => row.user_id))];
-
-      const { data: people, error: peopleError } = await supabase
-        .from("profiles")
-        .select("id,username,display_name,avatar_url")
-        .in("id", otherIds.length ? otherIds : [currentUser.id]);
-
-      if (peopleError) throw peopleError;
-
-      const profiles = Object.fromEntries((people || []).map((person) => [person.id, person]));
-      const recipientByConversation = {};
-
-      (members || []).forEach((member) => {
-        if (member.user_id !== currentUser.id) {
-          recipientByConversation[member.conversation_id] = profiles[member.user_id];
-        }
-      });
-
-      container.innerHTML = ids.map((id) => {
-        const recipient = recipientByConversation[id];
-        if (!recipient) return "";
-
-        return `
-          <button class="conversation-item ${activeConversation === id ? "active" : ""}"
-            data-conversation="${escapeHTML(id)}"
-            data-recipient="${escapeHTML(recipient.id)}">
-            <img class="avatar" src="${escapeHTML(avatarFor(recipient))}" alt="">
-            <span><strong>${escapeHTML(recipient.display_name || "Member")}</strong><small>@${escapeHTML(recipient.username || "member")}</small></span>
-          </button>`;
-      }).join("") || '<div class="empty-state">No conversations yet.</div>';
-
-      renderIcons();
-    } catch (error) {
-      console.error("Conversations error:", error);
-      container.innerHTML = `<div class="empty-state">Unable to load conversations: ${escapeHTML(friendlyError(error))}</div>`;
+    if (!messages.length) {
+      box.innerHTML =
+        '<div class="welcome"><h2>Say hello</h2><p>No messages yet.</p></div>';
+      return;
     }
-  }
 
-  async function startConversation(recipientId) {
-    if (!recipientId || recipientId === currentUser.id) return;
+    const rows = await Promise.all(messages.map(async m => {
+      const mine = m.sender_id === user.id;
+      let content = esc(m.content || "");
 
-    try {
-      const { data: memberships, error } = await supabase
-        .from("conversation_members")
-        .select("conversation_id")
-        .eq("user_id", currentUser.id);
+      if (m.attachment_path) {
+        const { data, error } = await db.storage
+          .from("message-files")
+          .createSignedUrl(m.attachment_path, 3600);
 
-      if (error) throw error;
-
-      for (const membership of memberships || []) {
-        const { data: other, error: otherError } = await supabase
-          .from("conversation_members")
-          .select("user_id")
-          .eq("conversation_id", membership.conversation_id)
-          .eq("user_id", recipientId)
-          .maybeSingle();
-
-        if (otherError) throw otherError;
-
-        if (other) {
-          activeConversation = membership.conversation_id;
-          activeRecipient = recipientId;
-          await loadConversations();
-          await openConversation(activeConversation, recipientId);
-          return;
+        if (!error && data?.signedUrl) {
+          content += `<a class="attachment" href="${esc(data.signedUrl)}"
+            target="_blank" rel="noopener noreferrer">
+            ${esc(m.attachment_name || "Download attachment")}
+            <br><small>${esc(m.attachment_size ? size(m.attachment_size) : "File")}</small>
+          </a>`;
+        } else {
+          content += `<p class="attachment">${esc(m.attachment_name || "Attachment unavailable")}</p>`;
         }
       }
 
-      const { data: conversation, error: conversationError } = await supabase
-        .from("conversations")
-        .insert({})
-        .select()
-        .single();
+      const person = mine ? profile : activePerson;
 
-      if (conversationError) throw conversationError;
-
-      const { error: membersError } = await supabase
-        .from("conversation_members")
-        .insert([
-          { conversation_id: conversation.id, user_id: currentUser.id },
-          { conversation_id: conversation.id, user_id: recipientId }
-        ]);
-
-      if (membersError) throw membersError;
-
-      activeConversation = conversation.id;
-      activeRecipient = recipientId;
-
-      await loadConversations();
-      await openConversation(activeConversation, recipientId);
-    } catch (error) {
-      toast("Unable to start conversation: " + friendlyError(error), true);
-    }
-  }
-
-  async function openConversation(conversationId, recipientId) {
-    activeConversation = conversationId;
-    activeRecipient = recipientId;
-
-    $("#chat-empty").classList.add("hidden");
-    $("#chat-content").classList.remove("hidden");
-
-    try {
-      const { data: recipient, error: recipientError } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", recipientId)
-        .single();
-
-      if (recipientError) throw recipientError;
-
-      $("#chat-header").innerHTML = `
-        <img class="avatar" src="${escapeHTML(avatarFor(recipient))}" alt="">
-        <span>${escapeHTML(recipient.display_name || "Community member")}<br><small>@${escapeHTML(recipient.username || "member")}</small></span>
-      `;
-
-      const { data: messages, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true })
-        .limit(200);
-
-      if (error) throw error;
-
-      const container = $("#chat-messages");
-
-      container.innerHTML = (messages || []).map((message) => `
-        <div class="message-bubble ${message.sender_id === currentUser.id ? "mine" : ""}">
-          ${escapeHTML(message.content)}
-          <small>${escapeHTML(timeAgo(message.created_at))}</small>
+      return `<article class="message-row ${mine ? "mine" : ""}">
+        <img src="${esc(avatar(person))}" alt="">
+        <div class="message-content">
+          <div class="message-author">${mine ? "You" :
+            esc(activePerson.display_name || activePerson.username)}</div>
+          <div class="bubble">${content}</div>
+          <div class="message-time">${esc(time(m.created_at))}</div>
         </div>
-      `).join("") || '<div class="empty-state">Say hello to start the conversation.</div>';
+      </article>`;
+    }));
 
-      container.scrollTop = container.scrollHeight;
-      renderIcons();
-    } catch (error) {
-      toast("Unable to open conversation: " + friendlyError(error), true);
-    }
+    box.innerHTML = rows.join("");
+    box.scrollTop = box.scrollHeight;
   }
 
-  async function handleMessageSubmit(event) {
-    event.preventDefault();
+  async function sendMessage() {
+    if (!activePerson || sending) return;
 
-    if (!activeConversation) {
-      setStatus($("#message-status"), "Choose or start a conversation first.", "error");
-      return;
-    }
+    const content = $("#message-input").value.trim();
+    const file = $("#file-input").files[0];
 
-    const form = event.currentTarget;
-    const content = form.elements.content.value.trim();
-    if (!content) return;
+    if (!content && !file) return;
+
+    sending = true;
+    $("#send-button").disabled = true;
 
     try {
-      const { error } = await supabase.from("messages").insert({
-        conversation_id: activeConversation,
-        sender_id: currentUser.id,
-        content
-      });
+      const attachment = {};
+
+      if (file) {
+        if (file.size > (cfg.maxFileBytes || 15 * 1024 * 1024)) {
+          throw new Error("Maximum attachment size is 15 MB.");
+        }
+
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const path = `${user.id}/${crypto.randomUUID()}-${safeName}`;
+
+        const { error: uploadError } = await db.storage
+          .from("message-files")
+          .upload(path, file, {
+            contentType: file.type || "application/octet-stream",
+            upsert: false
+          });
+
+        if (uploadError) throw uploadError;
+
+        attachment.attachment_path = path;
+        attachment.attachment_name = file.name;
+        attachment.attachment_type = file.type || "application/octet-stream";
+        attachment.attachment_size = file.size;
+      }
+
+      const { data, error } = await db.from("messages").insert({
+        sender_id: user.id,
+        receiver_id: activePerson.id,
+        content,
+        ...attachment
+      }).select("*").single();
 
       if (error) throw error;
 
-      form.reset();
-      setStatus($("#message-status"), "");
-      await openConversation(activeConversation, activeRecipient);
-    } catch (error) {
-      setStatus($("#message-status"), friendlyError(error), "error");
+      if (!messages.some(m => m.id === data.id)) {
+        messages.push(data);
+        await renderMessages();
+      }
+
+      $("#message-input").value = "";
+      $("#file-input").value = "";
+      $("#message-input").style.height = "auto";
+    } catch (e) {
+      console.error(e);
+      toast("Could not send message: " + e.message, true);
+    } finally {
+      sending = false;
+      $("#send-button").disabled = !activePerson;
     }
   }
 
-  function handleAvatarSelection(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  async function uploadAvatar(file) {
+    if (!user || !file) return;
 
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      toast("Choose a JPG, PNG, or WebP image.", true);
-      event.target.value = "";
-      return;
+      return toast("Use a JPG, PNG, or WebP image.", true);
     }
 
     if (file.size > 3 * 1024 * 1024) {
-      toast("Image must be 3 MB or smaller.", true);
-      event.target.value = "";
-      return;
+      return toast("Profile picture must be 3 MB or smaller.", true);
     }
 
-    selectedAvatar = file;
-    $("#profile-preview").src = URL.createObjectURL(file);
+    try {
+      const extension = file.type === "image/png" ? "png" :
+        file.type === "image/webp" ? "webp" : "jpg";
+
+      const path = `${user.id}/${crypto.randomUUID()}.${extension}`;
+
+      const { error: uploadError } = await db.storage.from("avatars")
+        .upload(path, file, { contentType: file.type, upsert: false });
+
+      if (uploadError) throw uploadError;
+
+      const { data: publicData } = db.storage.from("avatars").getPublicUrl(path);
+
+      const { data, error } = await db.from("profiles")
+        .update({ avatar_url: publicData.publicUrl })
+        .eq("id", user.id)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      profile = data;
+      paintMyProfile();
+      toast("Profile picture updated.");
+    } catch (e) {
+      console.error(e);
+      toast("Avatar upload failed: " + e.message, true);
+    }
   }
 
-  function handlePostImageSelection(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  function openProfileDialog() {
+    const form = $("#profile-form");
+    form.elements.display_name.value = profile.display_name || "";
+    form.elements.username.value = profile.username || "";
+    form.elements.bio.value = profile.bio || "";
+    $("#profile-dialog").showModal();
+  }
 
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 3 * 1024 * 1024) {
-      toast("Choose a JPG, PNG, or WebP image no larger than 3 MB.", true);
-      event.target.value = "";
-      return;
+  async function saveProfile(form) {
+    const data = new FormData(form);
+    const username = String(data.get("username")).trim().toLowerCase();
+
+    if (!/^[a-z0-9_]{3,24}$/.test(username)) {
+      return toast("Username must be 3–24 letters, numbers, or underscores.", true);
     }
 
-    selectedPostImage = file;
+    const { data: updated, error } = await db.from("profiles")
+      .update({
+        username,
+        display_name: String(data.get("display_name")).trim(),
+        bio: String(data.get("bio") || "").trim()
+      })
+      .eq("id", user.id)
+      .select("*")
+      .single();
 
-    const preview = $("#post-image-preview");
-    preview.innerHTML = `<img src="${URL.createObjectURL(file)}" alt="Selected post image">`;
-    preview.classList.remove("hidden");
+    if (error) return toast("Profile update failed: " + error.message, true);
+
+    profile = updated;
+    paintMyProfile();
+    $("#profile-dialog").close();
+    await loadPeople();
+    toast("Profile saved.");
   }
 
-  function registerEvents() {
-    $$(".auth-tab").forEach((button) => {
-      button.addEventListener("click", () => setAuthMode(button.dataset.mode));
+  async function logout() {
+    await finishCall(false);
+
+    if (messageChannel) await db.removeChannel(messageChannel);
+    if (peopleChannel) await db.removeChannel(peopleChannel);
+    if (incomingChannel) await db.removeChannel(incomingChannel);
+
+    const { error } = await db.auth.signOut();
+    if (error) return toast(error.message, true);
+
+    user = profile = activePerson = null;
+    messages = [];
+    people = [];
+    showAuth();
+  }
+
+  // WebRTC calling: the remote peer must be online and have this app open.
+  // A TURN server may be required on restrictive networks.
+  function newCallId() {
+    return crypto.randomUUID();
+  }
+
+  async function sendToUser(to, event, payload) {
+    const channel = db.channel(`calls:${to}`, {
+      config: { broadcast: { self: false } }
     });
 
-    authForm.addEventListener("submit", handleAuthSubmit);
-    $("#logout-button").addEventListener("click", logout);
-    $("#post-form").addEventListener("submit", handlePostSubmit);
-    $("#profile-form").addEventListener("submit", handleProfileSave);
-    $("#message-form").addEventListener("submit", handleMessageSubmit);
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Call signaling timed out.")), 10000);
 
-    $("#feed-list").addEventListener("click", handlePostAction);
-    $("#feed-list").addEventListener("submit", handleCommentSubmit);
-
-    $("#people-list").addEventListener("click", async (event) => {
-      const messageButton = event.target.closest("[data-message-user]");
-      if (messageButton) {
-        switchView("messages");
-        await startConversation(messageButton.dataset.messageUser);
-        return;
-      }
-
-      await handleFollowClick(event);
-    });
-
-    $("#suggested-list").addEventListener("click", handleFollowClick);
-
-    $("#conversation-list").addEventListener("click", (event) => {
-      const button = event.target.closest("[data-conversation]");
-      if (!button) return;
-
-      openConversation(button.dataset.conversation, button.dataset.recipient);
-    });
-
-    $("#post-image").addEventListener("change", handlePostImageSelection);
-    $("#profile-image").addEventListener("change", handleAvatarSelection);
-
-    $("#refresh-feed").addEventListener("click", loadFeed);
-    $("#refresh-people").addEventListener("click", loadPeople);
-    $("#people-search").addEventListener("input", debounce(loadPeople, 250));
-
-    $$("[data-view]").forEach((button) => {
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        switchView(button.dataset.view);
+      channel.subscribe(status => {
+        if (status === "SUBSCRIBED") {
+          clearTimeout(timeout);
+          channel.send({ type: "broadcast", event, payload })
+            .then(resolve).catch(reject);
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          clearTimeout(timeout);
+          reject(new Error("Could not connect to call signaling."));
+        }
       });
     });
+
+    setTimeout(() => db.removeChannel(channel), 2000);
   }
 
-  function debounce(callback, delay) {
-    let timer;
-    return (...args) => {
-      clearTimeout(timer);
-      timer = setTimeout(() => callback(...args), delay);
+  function subscribeIncomingCalls() {
+    if (incomingChannel) db.removeChannel(incomingChannel);
+
+    incomingChannel = db.channel(`calls:${user.id}`, {
+      config: { broadcast: { self: false } }
+    }).on("broadcast", { event: "invite" }, ({ payload }) => {
+      if (!payload || payload.to !== user.id || currentCall) return;
+
+      incomingCall = payload;
+      const person = people.find(p => p.id === payload.from);
+      if (person) activePerson = person;
+
+      $("#call-banner").classList.remove("hidden");
+      $("#call-status").textContent =
+        `Incoming ${payload.type === "video" ? "video" : "voice"} call`;
+      $("#call-detail").textContent = `${payload.fromName || "Someone"} is calling.`;
+      $("#accept-call").classList.remove("hidden");
+      $("#decline-call").classList.remove("hidden");
+      $("#end-call").classList.add("hidden");
+    }).on("broadcast", { event: "cancel" }, ({ payload }) => {
+      if (incomingCall?.callId === payload?.callId) {
+        incomingCall = null;
+        $("#call-banner").classList.add("hidden");
+      }
+    }).subscribe();
+  }
+
+  async function setupCallChannel() {
+    if (callChannel) await db.removeChannel(callChannel);
+
+    callChannel = db.channel(`call-session:${currentCall.callId}`, {
+      config: { broadcast: { self: false } }
+    }).on("broadcast", { event: "signal" }, async ({ payload }) => {
+      if (!payload || payload.from === user.id ||
+          payload.callId !== currentCall?.callId) return;
+
+      try {
+        if (payload.description) {
+          await pc.setRemoteDescription(payload.description);
+
+          if (payload.description.type === "offer") {
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await sendSignal({ description: pc.localDescription });
+          }
+        }
+
+        if (payload.candidate) {
+          await pc.addIceCandidate(payload.candidate);
+        }
+      } catch (e) {
+        console.error(e);
+        toast("Call signaling error: " + e.message, true);
+      }
+    }).on("broadcast", { event: "accepted" }, async ({ payload }) => {
+      if (currentCall?.role !== "caller" ||
+          payload?.callId !== currentCall.callId) return;
+
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await sendSignal({ description: pc.localDescription });
+      } catch (e) {
+        toast("Could not create call offer: " + e.message, true);
+      }
+    }).on("broadcast", { event: "ended" }, ({ payload }) => {
+      if (payload?.callId === currentCall?.callId) finishCall(false);
+    }).subscribe(async status => {
+      if (status === "SUBSCRIBED" && currentCall?.role === "callee") {
+        await sendSignal({ accepted: true });
+      }
+    });
+  }
+
+  async function sendSignal(extra) {
+    if (!callChannel || !currentCall) return;
+
+    await callChannel.send({
+      type: "broadcast",
+      event: extra.accepted ? "accepted" : extra.ended ? "ended" : "signal",
+      payload: { ...extra, callId: currentCall.callId, from: user.id }
+    });
+  }
+
+  async function prepareCallMedia(type) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Camera/microphone access requires HTTPS or localhost.");
+    }
+
+    // The browser will ask the user for camera and microphone permission.
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: type === "video"
+    });
+
+    remoteStream = new MediaStream();
+    $("#local-video").srcObject = localStream;
+    $("#remote-video").srcObject = remoteStream;
+
+    pc = new RTCPeerConnection({
+      iceServers: cfg.iceServers || [
+        { urls: "stun:stun.l.google.com:19302" }
+      ]
+    });
+
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+    pc.ontrack = event => {
+      event.streams[0]?.getTracks().forEach(track => remoteStream.addTrack(track));
+      $("#remote-video").srcObject = remoteStream;
     };
+
+    pc.onicecandidate = event => {
+      if (event.candidate) {
+        sendSignal({ candidate: event.candidate.toJSON() });
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc && ["failed", "disconnected"].includes(pc.connectionState)) {
+        toast("Call connection interrupted. A TURN server may be needed.", true);
+      }
+    };
+
+    $("#call-stage").classList.remove("hidden");
+    callStartedAt = Date.now();
+
+    clearInterval(callTimer);
+    callTimer = setInterval(() => {
+      if (!callStartedAt) return;
+      const seconds = Math.floor((Date.now() - callStartedAt) / 1000);
+      $("#call-clock").textContent =
+        `${String(Math.floor(seconds / 60)).padStart(2, "0")}:` +
+        `${String(seconds % 60).padStart(2, "0")}`;
+    }, 1000);
   }
 
-  async function initialize() {
-    initializeTheme();
-    renderIcons();
+  async function startCall(type) {
+    if (!activePerson) return toast("Choose someone first.", true);
+    if (currentCall) return toast("A call is already active.", true);
 
-    const url = config.supabaseUrl;
-    const key = config.supabasePublishableKey;
+    currentCall = {
+      callId: newCallId(),
+      type,
+      role: "caller",
+      peerId: activePerson.id,
+      peerName: activePerson.display_name || activePerson.username
+    };
 
-    if (!url || !key || key.includes("PASTE_YOUR")) {
-      setStatus(authMessage, "Set your Supabase URL and publishable key in config.js.", "error");
+    try {
+      await setupCallChannel();
+      await prepareCallMedia(type);
+
+      await sendToUser(activePerson.id, "invite", {
+        callId: currentCall.callId,
+        type,
+        from: user.id,
+        to: activePerson.id,
+        fromName: profile.display_name || profile.username
+      });
+
+      $("#call-banner").classList.remove("hidden");
+      $("#call-status").textContent = "Calling...";
+      $("#call-detail").textContent = `Waiting for ${currentCall.peerName}.`;
+      $("#accept-call").classList.add("hidden");
+      $("#decline-call").classList.add("hidden");
+      $("#end-call").classList.remove("hidden");
+    } catch (e) {
+      toast("Could not start call: " + e.message, true);
+      await finishCall(false);
+    }
+  }
+
+  async function acceptCall() {
+    if (!incomingCall) return;
+
+    const c = incomingCall;
+    currentCall = {
+      ...c,
+      role: "callee",
+      peerId: c.from,
+      peerName: c.fromName || "Member"
+    };
+    incomingCall = null;
+
+    try {
+      $("#call-banner").classList.add("hidden");
+      await setupCallChannel();
+      await prepareCallMedia(c.type);
+
+      $("#call-banner").classList.remove("hidden");
+      $("#call-status").textContent = "Connected";
+      $("#call-detail").textContent = `In a call with ${currentCall.peerName}.`;
+      $("#accept-call").classList.add("hidden");
+      $("#decline-call").classList.add("hidden");
+      $("#end-call").classList.remove("hidden");
+    } catch (e) {
+      toast("Could not accept call: " + e.message, true);
+      await finishCall(false);
+    }
+  }
+
+  async function declineCall() {
+    if (incomingCall) {
+      try {
+        await sendToUser(incomingCall.from, "cancel", {
+          callId: incomingCall.callId,
+          from: user.id
+        });
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+
+    incomingCall = null;
+    $("#call-banner").classList.add("hidden");
+  }
+
+  async function finishCall(notify = true) {
+    const old = currentCall;
+
+    if (notify && old) {
+      try {
+        await sendSignal({ ended: true });
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+
+    currentCall = null;
+    incomingCall = null;
+    callStartedAt = null;
+    clearInterval(callTimer);
+
+    if (pc) {
+      pc.close();
+      pc = null;
+    }
+
+    localStream?.getTracks().forEach(t => t.stop());
+    remoteStream?.getTracks().forEach(t => t.stop());
+    localStream = remoteStream = null;
+
+    $("#local-video").srcObject = null;
+    $("#remote-video").srcObject = null;
+    $("#call-stage").classList.add("hidden");
+    $("#call-banner").classList.add("hidden");
+
+    if (callChannel) {
+      await db.removeChannel(callChannel);
+      callChannel = null;
+    }
+  }
+
+  function toggleMute() {
+    const track = localStream?.getAudioTracks()[0];
+    if (!track) return;
+
+    track.enabled = !track.enabled;
+    $("#mute-call").textContent = track.enabled ? "Mute mic" : "Unmute mic";
+  }
+
+  function toggleCamera() {
+    const track = localStream?.getVideoTracks()[0];
+    if (!track) return;
+
+    track.enabled = !track.enabled;
+    $("#camera-call").textContent = track.enabled ? "Camera off" : "Camera on";
+  }
+
+  function wire() {
+    document.querySelectorAll("[data-tab]").forEach(b =>
+      b.addEventListener("click", () => showTab(b.dataset.tab))
+    );
+
+    $("#login-form").addEventListener("submit", e => {
+      e.preventDefault();
+      login(e.currentTarget);
+    });
+
+    $("#signup-form").addEventListener("submit", e => {
+      e.preventDefault();
+      signup(e.currentTarget);
+    });
+
+    $("#forgot-password").addEventListener("click", resetPassword);
+    $("#logout-button").addEventListener("click", logout);
+    $("#refresh-users")?.addEventListener("click", loadPeople);
+
+    $("#people-list").addEventListener("click", e => {
+      const button = e.target.closest("[data-person]");
+      if (button) openPerson(button.dataset.person);
+    });
+
+    $("#user-search").addEventListener("input", renderPeople);
+
+    $("#my-avatar").addEventListener("click", () => $("#avatar-upload").click());
+
+    $("#avatar-upload").addEventListener("change", e => {
+      if (e.target.files?.[0]) uploadAvatar(e.target.files[0]);
+      e.target.value = "";
+    });
+
+    $("#message-form").addEventListener("submit", e => {
+      e.preventDefault();
+      sendMessage();
+    });
+
+    $("#message-input").addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        $("#message-form").requestSubmit();
+      }
+    });
+
+    $("#message-input").addEventListener("input", e => {
+      e.target.style.height = "auto";
+      e.target.style.height = Math.min(e.target.scrollHeight, 130) + "px";
+    });
+
+    $("#file-input").addEventListener("change", e => {
+      const file = e.target.files?.[0];
+      if (file) toast(`Selected ${file.name} (${size(file.size)}). Press Send.`);
+    });
+
+    $("#theme-button").addEventListener("click", () => {
+      const next = document.body.dataset.theme === "light" ? "dark" : "light";
+      document.body.dataset.theme = next;
+      localStorage.setItem("talkatch-theme", next);
+    });
+
+    $("#edit-profile").addEventListener("click", openProfileDialog);
+    $("#close-profile").addEventListener("click", () => $("#profile-dialog").close());
+
+    $("#profile-form").addEventListener("submit", e => {
+      e.preventDefault();
+      saveProfile(e.currentTarget);
+    });
+
+    $("#voice-call").addEventListener("click", () => startCall("audio"));
+    $("#video-call").addEventListener("click", () => startCall("video"));
+    $("#accept-call").addEventListener("click", acceptCall);
+    $("#decline-call").addEventListener("click", declineCall);
+    $("#end-call").addEventListener("click", () => finishCall(true));
+    $("#hangup-call").addEventListener("click", () => finishCall(true));
+    $("#mute-call").addEventListener("click", toggleMute);
+    $("#camera-call").addEventListener("click", toggleCamera);
+
+    const theme = localStorage.getItem("talkatch-theme");
+    if (theme) document.body.dataset.theme = theme;
+  }
+
+  async function init() {
+    wire();
+
+    if (!cfg.supabaseUrl ||
+        !cfg.supabaseAnonKey ||
+        cfg.supabaseAnonKey.includes("PASTE_YOUR")) {
+      authMessage("Open config.js and add your Supabase publishable/anon key.", true);
       return;
     }
 
     if (!window.supabase?.createClient) {
-      setStatus(authMessage, "Supabase library did not load. Check your internet connection.", "error");
+      authMessage("Supabase failed to load. Check your internet connection.", true);
       return;
     }
 
-    supabase = window.supabase.createClient(url, key);
+    db = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
 
-    registerEvents();
-    setAuthMode("login");
-
-    const { data, error } = await supabase.auth.getSession();
-
+    const { data, error } = await db.auth.getSession();
     if (error) {
-      console.error("Session error:", error);
-      showAuthentication();
+      authMessage(error.message, true);
       return;
     }
 
-    if (data.session?.user) {
-      currentUser = data.session.user;
-      await enterApp();
-    } else {
-      showAuthentication();
-    }
+    if (data.session?.user) await startApp(data.session.user);
+    else showAuth();
 
-    supabase.auth.onAuthStateChange((event, session) => {
+    db.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session?.user && user?.id !== session.user.id) {
+        setTimeout(() => startApp(session.user), 0);
+      }
+
       if (event === "SIGNED_OUT") {
-        currentUser = null;
-        currentProfile = null;
-        showAuthentication();
-      } else if (event === "SIGNED_IN" && session?.user && !currentUser) {
-        currentUser = session.user;
-        setTimeout(() => enterApp(), 0);
+        user = profile = activePerson = null;
+        showAuth();
       }
     });
   }
 
-  document.addEventListener("DOMContentLoaded", initialize);
+  document.addEventListener("DOMContentLoaded", init);
 })();
